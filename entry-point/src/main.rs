@@ -5,10 +5,24 @@ mod extractors;
 mod models;
 
 use axum::Router;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use state::AppState;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+/// Percent-encodes a string for safe use in a URL userinfo component.
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            _ => out.push_str(&format!("%{:02X}", byte)),
+        }
+    }
+    out
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,11 +31,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL missing");
-    let redis_url = std::env::var("REDIS_URL").expect("REDIS_URL missing");
+    let db_opts = PgConnectOptions::new()
+        .host(&std::env::var("DB_HOST").expect("DB_HOST missing"))
+        .port(std::env::var("DB_PORT").expect("DB_PORT missing").parse().expect("DB_PORT must be a number"))
+        .username(&std::env::var("DB_USER").expect("DB_USER missing"))
+        .password(&std::env::var("DB_PASSWORD").expect("DB_PASSWORD missing"))
+        .database(&std::env::var("DB_NAME").expect("DB_NAME missing"));
+
+    let redis_host = std::env::var("REDIS_HOST").expect("REDIS_HOST missing");
+    let redis_port = std::env::var("REDIS_PORT").expect("REDIS_PORT missing");
+    let redis_password = url_encode(&std::env::var("REDIS_PASSWORD").expect("REDIS_PASSWORD missing"));
+    let redis_url = format!("redis://:{}@{}:{}", redis_password, redis_host, redis_port);
 
     tracing::info!("Connecting to Postgres...");
-    let pool = PgPoolOptions::new().connect(&db_url).await?;
+    let pool = PgPoolOptions::new().connect_with(db_opts).await?;
     tracing::info!("Connected to Postgres");
 
     sqlx::migrate!("./migrations")

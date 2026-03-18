@@ -45,8 +45,14 @@ services:
       - "${APP_PORT}:${APP_PORT}"
     environment:
       APP_PORT: ${APP_PORT}
-      DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@postgres:${POSTGRES_PORT}/${DB_NAME}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:${REDIS_PORT}
+      DB_HOST: postgres
+      DB_PORT: ${POSTGRES_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      REDIS_HOST: redis
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
     develop:
       watch:
         - action: rebuild
