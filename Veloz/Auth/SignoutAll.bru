@@ -1,0 +1,22 @@
+meta {
+  name: Signout All
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{base_url}}/auth/signout-all
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+script:post-response {
+  if (res.status === 204) {
+    bru.setEnvVar("access_token", "");
+    bru.setEnvVar("refresh_token", "");
+  }
+}

@@ -1,0 +1,22 @@
+meta {
+  name: Signout
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{base_url}}/auth/signout
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+script:post-response {
+  if (res.status === 204) {
+    bru.setEnvVar("access_token", "");
+    bru.setEnvVar("refresh_token", "");
+  }
+}

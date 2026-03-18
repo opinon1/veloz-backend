@@ -1,0 +1,25 @@
+meta {
+  name: Signin
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{base_url}}/auth/signin
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "email": "john@example.com",
+    "password": "securepassword123"
+  }
+}
+
+script:post-response {
+  if (res.status === 200) {
+    bru.setEnvVar("access_token", res.body.access_token);
+    bru.setEnvVar("refresh_token", res.body.refresh_token);
+  }
+}

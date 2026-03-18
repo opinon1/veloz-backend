@@ -1,0 +1,9 @@
+# Environment
+.env
+
+# Rust
+entry-point/target/
+
+# Docker volumes (if ever mounted locally)
+postgres_data/
+redis_data/
