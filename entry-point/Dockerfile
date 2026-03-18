@@ -26,4 +26,6 @@ WORKDIR /app
 COPY --from=builder /app/veloz /app/veloz
 RUN apk add --no-cache ca-certificates openssl
 
+EXPOSE 81
+
 ENTRYPOINT ["/app/veloz"]
