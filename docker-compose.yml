@@ -53,6 +53,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: ${REDIS_PORT}
       REDIS_PASSWORD: ${REDIS_PASSWORD}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
     develop:
       watch:
         - action: rebuild

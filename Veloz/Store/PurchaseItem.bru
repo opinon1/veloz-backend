@@ -1,0 +1,15 @@
+meta {
+  name: Purchase Item
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{base_url}}/store/{{store_item_id}}/purchase
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}

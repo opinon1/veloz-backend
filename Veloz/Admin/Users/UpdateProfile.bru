@@ -1,0 +1,22 @@
+meta {
+  name: Update Profile
+  type: http
+  seq: 4
+}
+
+patch {
+  url: {{base_url}}/admin/users/{{target_user_id}}/profile
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "price_multiplier": 0.8,
+    "main_highscore": 99999
+  }
+}

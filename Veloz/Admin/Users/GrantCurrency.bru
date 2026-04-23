@@ -1,0 +1,23 @@
+meta {
+  name: Grant Currency
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{base_url}}/admin/users/{{target_user_id}}/grant
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "currency": "high",
+    "amount": 1000,
+    "reason": "admin_grant"
+  }
+}

@@ -1,0 +1,33 @@
+meta {
+  name: Create Skin
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{base_url}}/admin/skins
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "name": "Neon Runner",
+    "description": "Glowing cyberpunk outfit",
+    "outfit_url": "https://cdn.example.com/skins/neon-runner.glb",
+    "cost": 500,
+    "currency": "soft",
+    "is_default": false,
+    "metadata": {}
+  }
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setEnvVar("skin_id", res.body.id);
+  }
+}

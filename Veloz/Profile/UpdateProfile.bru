@@ -1,0 +1,22 @@
+meta {
+  name: Update Profile
+  type: http
+  seq: 2
+}
+
+patch {
+  url: {{base_url}}/profile
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "avatar_url": "{{skin_id}}",
+    "frame_url": "https://cdn.example.com/frames/gold.png"
+  }
+}

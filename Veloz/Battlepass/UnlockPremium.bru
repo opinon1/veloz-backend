@@ -1,0 +1,15 @@
+meta {
+  name: Unlock Premium
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{base_url}}/battlepass/unlock-premium
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}

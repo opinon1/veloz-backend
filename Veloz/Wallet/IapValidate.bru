@@ -1,0 +1,23 @@
+meta {
+  name: IAP Validate
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{base_url}}/wallet/iap/validate
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "product_id": "com.veloz.gems_100",
+    "platform": "ios",
+    "receipt": "BASE64_RECEIPT_STRING"
+  }
+}

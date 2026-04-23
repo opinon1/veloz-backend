@@ -1,0 +1,20 @@
+meta {
+  name: List Users
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{base_url}}/admin/users?limit=50
+  body: none
+  auth: bearer
+}
+
+params:query {
+  limit: 50
+  ~search: john
+}
+
+auth:bearer {
+  token: {{access_token}}
+}

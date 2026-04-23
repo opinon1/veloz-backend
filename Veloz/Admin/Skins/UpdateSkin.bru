@@ -1,0 +1,22 @@
+meta {
+  name: Update Skin
+  type: http
+  seq: 3
+}
+
+patch {
+  url: {{base_url}}/admin/skins/{{skin_id}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "cost": 750,
+    "is_active": true
+  }
+}

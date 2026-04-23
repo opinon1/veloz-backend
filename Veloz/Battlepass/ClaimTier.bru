@@ -1,0 +1,21 @@
+meta {
+  name: Claim Tier
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{base_url}}/battlepass/claim/1
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "track": "free"
+  }
+}

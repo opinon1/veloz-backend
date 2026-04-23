@@ -3,6 +3,7 @@ mod middleware;
 mod state;
 mod extractors;
 mod models;
+mod leveling;
 
 use axum::Router;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -64,6 +65,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .nest("/auth", handlers::auth::router::router(&state))
+        .nest("/profile", handlers::profile::router::router())
+        .nest("/wallet", handlers::wallet::router::router())
+        .nest("/skins", handlers::skins::router::router())
+        .nest("/battlepass", handlers::battlepass::router::router())
+        .nest("/store", handlers::store::router::router())
+        .nest("/runs", handlers::runs::router::router())
+        .nest("/admin", handlers::admin::router::router())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

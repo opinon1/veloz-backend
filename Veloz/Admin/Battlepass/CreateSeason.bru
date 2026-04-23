@@ -1,0 +1,33 @@
+meta {
+  name: Create Season
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{base_url}}/admin/battlepass/seasons
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "name": "Season 1",
+    "description": "Launch season",
+    "starts_at": "2026-04-22T00:00:00Z",
+    "ends_at": "2026-06-22T00:00:00Z",
+    "premium_cost": 100,
+    "premium_currency": "high",
+    "metadata": {}
+  }
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setEnvVar("season_id", res.body.id);
+  }
+}

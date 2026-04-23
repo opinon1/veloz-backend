@@ -27,23 +27,42 @@ pub struct RateLimitLayer {
     max_requests: i64,
     window_secs: i64,
     key_prefix: String,
+    enabled: bool,
 }
 
 impl RateLimitLayer {
     /// - `max_requests`: maximum requests allowed per window
     /// - `window_secs`: window duration in seconds
     /// - `key_prefix`: namespaces the Redis key (e.g. `"signin"`, `"signup"`)
+    ///
+    /// Honors the `RATE_LIMIT_ENABLED` env var (default: true). When set to
+    /// `false` / `0`, every request is passed through without a Redis round-trip.
+    /// Intended for beta/integration environments; leave enabled in production.
     pub fn new(
         redis: redis::aio::ConnectionManager,
         max_requests: i64,
         window_secs: i64,
         key_prefix: impl Into<String>,
     ) -> Self {
+        let enabled = std::env::var("RATE_LIMIT_ENABLED")
+            .map(|v| {
+                let v = v.trim().to_ascii_lowercase();
+                !(v == "false" || v == "0" || v == "no" || v == "off")
+            })
+            .unwrap_or(true);
+        let key_prefix: String = key_prefix.into();
+        if !enabled {
+            tracing::warn!(
+                prefix = %key_prefix,
+                "rate limiting DISABLED via RATE_LIMIT_ENABLED env var"
+            );
+        }
         Self {
             redis,
             max_requests,
             window_secs,
-            key_prefix: key_prefix.into(),
+            key_prefix,
+            enabled,
         }
     }
 }
@@ -58,6 +77,7 @@ impl<S> Layer<S> for RateLimitLayer {
             max_requests: self.max_requests,
             window_secs: self.window_secs,
             key_prefix: self.key_prefix.clone(),
+            enabled: self.enabled,
         }
     }
 }
@@ -69,6 +89,7 @@ pub struct RateLimitService<S> {
     max_requests: i64,
     window_secs: i64,
     key_prefix: String,
+    enabled: bool,
 }
 
 impl<S> Service<Request<Body>> for RateLimitService<S>
@@ -86,6 +107,13 @@ where
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
+        // Short-circuit when disabled — no Redis round-trip, no bucket.
+        if !self.enabled {
+            let fresh = self.inner.clone();
+            let inner = std::mem::replace(&mut self.inner, fresh);
+            return Box::pin(async move { inner.oneshot(req).await });
+        }
+
         // X-Forwarded-For is set by reverse proxies (Dokploy/nginx in production).
         // Fall back to the real peer address for direct connections (localhost).
         let ip = req

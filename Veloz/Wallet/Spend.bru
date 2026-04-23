@@ -1,0 +1,24 @@
+meta {
+  name: Spend
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{base_url}}/wallet/spend
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "currency": "soft",
+    "amount": 50,
+    "reason": "spend",
+    "reference_id": null
+  }
+}

@@ -1,0 +1,22 @@
+meta {
+  name: Update Item
+  type: http
+  seq: 3
+}
+
+patch {
+  url: {{base_url}}/admin/store/{{store_item_id}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "cost": 15,
+    "is_active": true
+  }
+}

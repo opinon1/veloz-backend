@@ -1,0 +1,15 @@
+meta {
+  name: Purchase Skin
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{base_url}}/skins/{{skin_id}}/purchase
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}

@@ -1,0 +1,15 @@
+meta {
+  name: Equip Skin
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{base_url}}/skins/{{skin_id}}/equip
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}

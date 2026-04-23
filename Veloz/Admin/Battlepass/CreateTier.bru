@@ -1,0 +1,37 @@
+meta {
+  name: Create Tier
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{base_url}}/admin/battlepass/seasons/{{season_id}}/tiers
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "tier": 1,
+    "xp_required": 100,
+    "free_reward": {
+      "type": "currency",
+      "currency": "soft",
+      "amount": 50
+    },
+    "premium_reward": {
+      "type": "skin",
+      "skin_id": "{{skin_id}}"
+    }
+  }
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setEnvVar("tier_id", res.body.id);
+  }
+}

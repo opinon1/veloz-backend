@@ -1,0 +1,22 @@
+meta {
+  name: Update Season
+  type: http
+  seq: 3
+}
+
+patch {
+  url: {{base_url}}/admin/battlepass/seasons/{{season_id}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "name": "Season 1 — Remixed",
+    "premium_cost": 150
+  }
+}

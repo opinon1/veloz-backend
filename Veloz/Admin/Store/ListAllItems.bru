@@ -1,0 +1,15 @@
+meta {
+  name: List All Items
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/admin/store
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}

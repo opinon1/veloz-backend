@@ -1,0 +1,15 @@
+meta {
+  name: Delete Item
+  type: http
+  seq: 4
+}
+
+delete {
+  url: {{base_url}}/admin/store/{{store_item_id}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
