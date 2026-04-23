@@ -76,11 +76,19 @@ pub struct UpdateRoleResponse {
 
 pub async fn update_role(
     State(state): State<AppState>,
-    AdminClaims(_): AdminClaims,
+    AdminClaims(session): AdminClaims,
     Path(user_id): Path<Uuid>,
     Json(payload): Json<UpdateRoleRequest>,
 ) -> Result<Json<UpdateRoleResponse>, StatusCode> {
     if payload.role != "user" && payload.role != "admin" {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Refuse self-demotion — an admin removing their own role could lock the
+    // account out of admin endpoints entirely, and if they're the only admin
+    // the system becomes unrecoverable without direct DB access. To step
+    // down, another admin must perform the demotion.
+    if user_id == session.user_id && payload.role != "admin" {
         return Err(StatusCode::BAD_REQUEST);
     }
 

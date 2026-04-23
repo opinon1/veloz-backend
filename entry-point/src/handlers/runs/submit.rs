@@ -63,15 +63,22 @@ pub async fn submit_run(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Update profile: XP, level, highscore.
-    let profile: (i64, i64) = sqlx::query_as(
+    // CTE captures the PRE-update highscore so we can report `new_highscore`
+    // with a strict `>` comparison — ties with the previous PB no longer
+    // flash as a new record on the client.
+    let profile: (i64, i64, i64) = sqlx::query_as(
         r#"
+        WITH prev AS (
+            SELECT main_highscore AS old_hs FROM profiles WHERE user_id = $1
+        )
         UPDATE profiles
         SET
             total_xp = total_xp + $2,
             main_highscore = GREATEST(main_highscore, $3),
             updated_at = CURRENT_TIMESTAMP
+        FROM prev
         WHERE user_id = $1
-        RETURNING total_xp, main_highscore
+        RETURNING total_xp, main_highscore, prev.old_hs
         "#,
     )
     .bind(session.user_id)
@@ -81,7 +88,7 @@ pub async fn submit_run(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let (new_total_xp, main_highscore) = profile;
+    let (new_total_xp, main_highscore, old_highscore) = profile;
     let new_level = level_from_total_xp(new_total_xp);
 
     sqlx::query("UPDATE profiles SET account_level = $2 WHERE user_id = $1")
@@ -91,7 +98,7 @@ pub async fn submit_run(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let new_highscore = payload.score > 0 && payload.score >= main_highscore;
+    let new_highscore = payload.score > 0 && payload.score > old_highscore;
 
     // Grant soft currency = coins_collected.
     let new_soft_balance = if payload.coins_collected > 0 {

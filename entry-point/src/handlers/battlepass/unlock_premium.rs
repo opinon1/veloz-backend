@@ -34,19 +34,27 @@ pub async fn unlock_premium(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let already: (bool,) = sqlx::query_as(
-        "SELECT premium_unlocked FROM bp_progress WHERE user_id = $1 AND season_id = $2",
+    // Atomic claim: flip premium_unlocked from FALSE → TRUE. If the row was
+    // already TRUE, rows_affected == 0 and we return 409 without charging.
+    // This closes the race where two concurrent unlock calls could both pass
+    // a SELECT premium_unlocked=FALSE check and both charge the wallet.
+    let claim = sqlx::query(
+        r#"UPDATE bp_progress
+           SET premium_unlocked = TRUE, updated_at = CURRENT_TIMESTAMP
+           WHERE user_id = $1 AND season_id = $2 AND premium_unlocked = FALSE"#,
     )
     .bind(session.user_id)
     .bind(season.id)
-    .fetch_one(&mut *tx)
+    .execute(&mut *tx)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    if already.0 {
+    if claim.rows_affected() == 0 {
         return Err(StatusCode::CONFLICT);
     }
 
+    // Charge inside the same tx — if adjust_balance errors (insufficient
+    // funds), the rollback reverts the premium_unlocked flip as well.
     let new_balance = if season.premium_cost > 0 {
         adjust_balance(
             &mut tx,
@@ -60,17 +68,6 @@ pub async fn unlock_premium(
     } else {
         0
     };
-
-    sqlx::query(
-        r#"UPDATE bp_progress
-           SET premium_unlocked = TRUE, updated_at = CURRENT_TIMESTAMP
-           WHERE user_id = $1 AND season_id = $2"#,
-    )
-    .bind(session.user_id)
-    .bind(season.id)
-    .execute(&mut *tx)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

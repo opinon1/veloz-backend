@@ -60,6 +60,9 @@ pub async fn signup(
         ));
     }
 
+    // Normalize email: lowercase so later signin lookups are case-insensitive.
+    let email = payload.email.trim().to_lowercase();
+
     let password_hash = hash(payload.password, DEFAULT_COST)
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { message: "Internal server error".into() })))?;
 
@@ -71,7 +74,7 @@ pub async fn signup(
         "#,
     )
     .bind(&payload.username)
-    .bind(&payload.email)
+    .bind(&email)
     .bind(password_hash)
     .fetch_one(&state.db)
     .await

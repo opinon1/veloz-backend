@@ -35,10 +35,12 @@ pub async fn signin(
     headers: HeaderMap,
     Json(payload): Json<SigninRequest>,
 ) -> Result<Json<SigninResponse>, StatusCode> {
+    // Mirror signup normalization so signin is case-insensitive on email.
+    let email = payload.email.trim().to_lowercase();
     let user = sqlx::query_as::<_, UserAuth>(
         "SELECT id, username, email, password_hash, is_active FROM users WHERE email = $1"
     )
-    .bind(&payload.email)
+    .bind(&email)
     .fetch_optional(&state.db)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?

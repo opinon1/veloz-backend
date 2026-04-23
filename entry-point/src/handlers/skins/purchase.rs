@@ -33,17 +33,21 @@ pub async fn purchase_skin(
         return Err(StatusCode::GONE);
     }
 
-    // Check ownership first to avoid double-charging.
-    let owned: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT user_id FROM user_skins WHERE user_id = $1 AND skin_id = $2",
+    // Claim ownership FIRST. ON CONFLICT DO NOTHING returns 0 rows_affected
+    // when the user already owns the skin — treat that as 409 without
+    // charging. Doing this before the wallet deduction closes the
+    // check-then-act race where two concurrent requests could both pass an
+    // "is it owned?" SELECT and double-charge.
+    let inserted = sqlx::query(
+        "INSERT INTO user_skins (user_id, skin_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
     )
     .bind(session.user_id)
     .bind(skin_id)
-    .fetch_optional(&mut *tx)
+    .execute(&mut *tx)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    if owned.is_some() {
+    if inserted.rows_affected() == 0 {
         return Err(StatusCode::CONFLICT);
     }
 
@@ -58,18 +62,16 @@ pub async fn purchase_skin(
         )
         .await?
     } else {
-        // Free skin — no ledger entry.
-        0
+        // Free skin — no ledger entry. Still return actual current balance
+        // so clients display accurate UI.
+        let q = format!("SELECT {col} FROM wallets WHERE user_id = $1", col = currency);
+        let (bal,): (i64,) = sqlx::query_as(&q)
+            .bind(session.user_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        bal
     };
-
-    sqlx::query(
-        "INSERT INTO user_skins (user_id, skin_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-    )
-    .bind(session.user_id)
-    .bind(skin_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

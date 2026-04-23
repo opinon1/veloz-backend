@@ -4,6 +4,70 @@ use uuid::Uuid;
 use crate::state::AppState;
 use crate::extractors::AdminClaims;
 
+/// Validates a store item's currency + item_type combo and confirms the
+/// payload shape matches the declared type. Called on create and update so
+/// purchase-time fulfillment can assume the payload is well-formed.
+///
+/// Fails fast at admin-time (400) instead of silently skipping fulfillment
+/// at purchase-time (which charges the user but grants nothing).
+fn validate_store_payload(
+    item_type: &str,
+    currency: &str,
+    iap_product_id: Option<&str>,
+    payload: &serde_json::Value,
+) -> Result<(), StatusCode> {
+    if !matches!(currency, "high" | "soft" | "energy" | "iap") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if currency == "iap" && iap_product_id.map(|s| s.is_empty()).unwrap_or(true) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    match item_type {
+        "skin" => {
+            let sid = payload
+                .get("skin_id")
+                .and_then(|v| v.as_str())
+                .ok_or(StatusCode::BAD_REQUEST)?;
+            Uuid::parse_str(sid).map_err(|_| StatusCode::BAD_REQUEST)?;
+        }
+        "currency_bundle" => {
+            let obj = payload.as_object().ok_or(StatusCode::BAD_REQUEST)?;
+            // Every key must be a known currency mapped to a positive integer;
+            // at least one entry must exist so the purchase actually grants
+            // something.
+            let mut granted_any = false;
+            for (k, v) in obj {
+                if !matches!(k.as_str(), "high" | "soft" | "energy") {
+                    return Err(StatusCode::BAD_REQUEST);
+                }
+                let amt = v.as_i64().ok_or(StatusCode::BAD_REQUEST)?;
+                if amt <= 0 {
+                    return Err(StatusCode::BAD_REQUEST);
+                }
+                granted_any = true;
+            }
+            if !granted_any {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+        "energy_refill" => {
+            let amt = payload
+                .get("energy")
+                .and_then(|v| v.as_i64())
+                .ok_or(StatusCode::BAD_REQUEST)?;
+            if amt <= 0 {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+        "bp_unlock" | "frame" | "custom" => {
+            // No server-side fulfillment; payload is opaque for the frontend.
+        }
+        _ => return Err(StatusCode::BAD_REQUEST),
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 pub struct CreateItemRequest {
     pub name: String,
@@ -39,6 +103,13 @@ pub async fn create_item(
     AdminClaims(_): AdminClaims,
     Json(payload): Json<CreateItemRequest>,
 ) -> Result<(StatusCode, Json<StoreItemRow>), StatusCode> {
+    validate_store_payload(
+        &payload.item_type,
+        &payload.currency,
+        payload.iap_product_id.as_deref(),
+        &payload.payload,
+    )?;
+
     let row = sqlx::query_as::<_, StoreItemRow>(
         r#"
         INSERT INTO store_items (name, description, item_type, cost, currency, iap_product_id, payload, metadata)
@@ -94,6 +165,33 @@ pub async fn update_item(
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateItemRequest>,
 ) -> Result<Json<StoreItemRow>, StatusCode> {
+    // If the update touches item_type/currency/payload/iap_product_id, we need
+    // the full effective tuple to validate. Merge the provided fields with the
+    // current row so partial updates don't bypass validation.
+    if payload.item_type.is_some()
+        || payload.currency.is_some()
+        || payload.payload.is_some()
+        || payload.iap_product_id.is_some()
+    {
+        let current: Option<(String, String, Option<String>, serde_json::Value)> = sqlx::query_as(
+            "SELECT item_type, currency, iap_product_id, payload FROM store_items WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let (cur_type, cur_currency, cur_iap, cur_payload) =
+            current.ok_or(StatusCode::NOT_FOUND)?;
+        let effective_type = payload.item_type.as_deref().unwrap_or(&cur_type);
+        let effective_currency = payload.currency.as_deref().unwrap_or(&cur_currency);
+        let effective_iap = payload
+            .iap_product_id
+            .as_deref()
+            .or(cur_iap.as_deref());
+        let effective_payload = payload.payload.as_ref().unwrap_or(&cur_payload);
+        validate_store_payload(effective_type, effective_currency, effective_iap, effective_payload)?;
+    }
+
     let row = sqlx::query_as::<_, StoreItemRow>(
         r#"
         UPDATE store_items SET
