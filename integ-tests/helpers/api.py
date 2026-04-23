@@ -171,6 +171,9 @@ class AuthedClient:
     def admin_delete_store_item(self, item_id: str) -> httpx.Response:
         return self._c.raw_delete(f"/admin/store/{item_id}", self.access_token)
 
+    def admin_list_store_items(self) -> httpx.Response:
+        return self._c.raw_get("/admin/store", self.access_token)
+
     def admin_create_season(self, **fields: Any) -> httpx.Response:
         return self._c.raw_post("/admin/battlepass/seasons", self.access_token, json=fields)
 
@@ -182,6 +185,14 @@ class AuthedClient:
     def admin_delete_season(self, season_id: str) -> httpx.Response:
         return self._c.raw_delete(
             f"/admin/battlepass/seasons/{season_id}", self.access_token
+        )
+
+    def admin_list_seasons(self) -> httpx.Response:
+        return self._c.raw_get("/admin/battlepass/seasons", self.access_token)
+
+    def admin_list_tiers(self, season_id: str) -> httpx.Response:
+        return self._c.raw_get(
+            f"/admin/battlepass/seasons/{season_id}/tiers", self.access_token
         )
 
     def admin_create_tier(self, season_id: str, **fields: Any) -> httpx.Response:

@@ -222,3 +222,56 @@ def test_admin_season_invalid_window(admin):
         ends_at=_iso(now + timedelta(days=5)),
     )
     assert r.status_code >= 400
+
+
+@pytest.mark.admin
+def test_admin_list_seasons(admin):
+    """GET /admin/battlepass/seasons returns every season — past, active, future."""
+    now = datetime.now(timezone.utc)
+    future = admin.admin_create_season(
+        name=rand_season_name(),
+        starts_at=_iso(now + timedelta(days=100)),
+        ends_at=_iso(now + timedelta(days=130)),
+    ).json()
+    r = admin.admin_list_seasons()
+    assert r.status_code == 200
+    ids = [s["id"] for s in r.json()]
+    assert future["id"] in ids
+
+
+@pytest.mark.admin
+def test_admin_list_tiers(admin, active_season, tier_cheap, tier_expensive):
+    """GET /admin/battlepass/seasons/{id}/tiers lists all tiers for the season,
+    ordered by tier number."""
+    r = admin.admin_list_tiers(active_season["id"])
+    assert r.status_code == 200
+    rows = r.json()
+    numbers = [t["tier"] for t in rows]
+    assert 1 in numbers
+    assert 2 in numbers
+    assert numbers == sorted(numbers)
+
+
+@pytest.mark.admin
+def test_admin_tier_update_and_delete(admin, active_season, tier_cheap):
+    """PATCH + DELETE on /admin/battlepass/tiers/{id}."""
+    updated = admin.admin_update_tier(tier_cheap["id"], xp_required=999).json()
+    assert updated["xp_required"] == 999
+
+    assert admin.admin_delete_tier(tier_cheap["id"]).status_code == 204
+    # Post-delete PATCH → 404.
+    assert admin.admin_update_tier(tier_cheap["id"], xp_required=1).status_code == 404
+
+
+@pytest.mark.admin
+def test_admin_tier_update_unknown(admin):
+    """Updating nonexistent tier UUID → 404."""
+    r = admin.admin_update_tier(
+        "00000000-0000-0000-0000-000000000000", xp_required=10
+    )
+    assert r.status_code == 404
+
+
+def test_non_admin_cannot_list_seasons(user):
+    """Regular user on admin list → 403."""
+    assert user.admin_list_seasons().status_code == 403

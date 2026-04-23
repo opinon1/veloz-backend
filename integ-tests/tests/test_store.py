@@ -147,3 +147,26 @@ def test_admin_store_crud(admin):
     ).json()
     assert admin.admin_update_store_item(item["id"], cost=2).json()["cost"] == 2
     assert admin.admin_delete_store_item(item["id"]).status_code == 204
+
+
+@pytest.mark.admin
+def test_admin_list_store_items_shows_inactive(admin):
+    """GET /admin/store returns both active + inactive items (unlike public /store)."""
+    active = admin.admin_create_store_item(
+        name=rand_item_name("Active"), item_type="custom", cost=1, currency="soft"
+    ).json()
+    inactive = admin.admin_create_store_item(
+        name=rand_item_name("Hidden"), item_type="custom", cost=1, currency="soft"
+    ).json()
+    admin.admin_update_store_item(inactive["id"], is_active=False)
+
+    r = admin.admin_list_store_items()
+    assert r.status_code == 200
+    ids = [i["id"] for i in r.json()]
+    assert active["id"] in ids
+    assert inactive["id"] in ids
+
+
+def test_non_admin_cannot_list_store(user):
+    """Regular user → 403 on admin list."""
+    assert user.admin_list_store_items().status_code == 403
