@@ -1,46 +1,47 @@
 use axum::{extract::{Path, State}, Json, http::StatusCode};
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use uuid::Uuid;
 use crate::state::AppState;
 use crate::extractors::AdminClaims;
+use crate::models::store_types::{Currency, ItemType, StoreCurrency};
 
 /// Validates a store item's currency + item_type combo and confirms the
 /// payload shape matches the declared type. Called on create and update so
 /// purchase-time fulfillment can assume the payload is well-formed.
 ///
 /// Fails fast at admin-time (400) instead of silently skipping fulfillment
-/// at purchase-time (which charges the user but grants nothing).
+/// at purchase-time (which would charge the user but grant nothing).
+///
+/// Inputs are typed enums — adding a new `ItemType` variant produces a
+/// compile error here until it's handled.
 fn validate_store_payload(
-    item_type: &str,
-    currency: &str,
+    item_type: ItemType,
+    currency: StoreCurrency,
     iap_product_id: Option<&str>,
     payload: &serde_json::Value,
 ) -> Result<(), StatusCode> {
-    if !matches!(currency, "high" | "soft" | "energy" | "iap") {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    if currency == "iap" && iap_product_id.map(|s| s.is_empty()).unwrap_or(true) {
+    if matches!(currency, StoreCurrency::Iap)
+        && iap_product_id.map(str::is_empty).unwrap_or(true)
+    {
         return Err(StatusCode::BAD_REQUEST);
     }
 
     match item_type {
-        "skin" => {
+        ItemType::Skin => {
             let sid = payload
                 .get("skin_id")
                 .and_then(|v| v.as_str())
                 .ok_or(StatusCode::BAD_REQUEST)?;
             Uuid::parse_str(sid).map_err(|_| StatusCode::BAD_REQUEST)?;
         }
-        "currency_bundle" => {
+        ItemType::CurrencyBundle => {
             let obj = payload.as_object().ok_or(StatusCode::BAD_REQUEST)?;
-            // Every key must be a known currency mapped to a positive integer;
-            // at least one entry must exist so the purchase actually grants
-            // something.
             let mut granted_any = false;
             for (k, v) in obj {
-                if !matches!(k.as_str(), "high" | "soft" | "energy") {
-                    return Err(StatusCode::BAD_REQUEST);
-                }
+                // Each key must parse as a wallet Currency, and the value
+                // must be a positive integer.
+                Currency::from_str(k).map_err(|_| StatusCode::BAD_REQUEST)?;
                 let amt = v.as_i64().ok_or(StatusCode::BAD_REQUEST)?;
                 if amt <= 0 {
                     return Err(StatusCode::BAD_REQUEST);
@@ -51,7 +52,7 @@ fn validate_store_payload(
                 return Err(StatusCode::BAD_REQUEST);
             }
         }
-        "energy_refill" => {
+        ItemType::EnergyRefill => {
             let amt = payload
                 .get("energy")
                 .and_then(|v| v.as_i64())
@@ -60,10 +61,9 @@ fn validate_store_payload(
                 return Err(StatusCode::BAD_REQUEST);
             }
         }
-        "bp_unlock" | "frame" | "custom" => {
+        ItemType::Frame | ItemType::BpUnlock | ItemType::Custom => {
             // No server-side fulfillment; payload is opaque for the frontend.
         }
-        _ => return Err(StatusCode::BAD_REQUEST),
     }
     Ok(())
 }
@@ -103,9 +103,13 @@ pub async fn create_item(
     AdminClaims(_): AdminClaims,
     Json(payload): Json<CreateItemRequest>,
 ) -> Result<(StatusCode, Json<StoreItemRow>), StatusCode> {
+    let item_type = ItemType::from_str(&payload.item_type)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let currency = StoreCurrency::from_str(&payload.currency)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
     validate_store_payload(
-        &payload.item_type,
-        &payload.currency,
+        item_type,
+        currency,
         payload.iap_product_id.as_deref(),
         &payload.payload,
     )?;
@@ -182,13 +186,17 @@ pub async fn update_item(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let (cur_type, cur_currency, cur_iap, cur_payload) =
             current.ok_or(StatusCode::NOT_FOUND)?;
-        let effective_type = payload.item_type.as_deref().unwrap_or(&cur_type);
-        let effective_currency = payload.currency.as_deref().unwrap_or(&cur_currency);
+        let effective_type_str = payload.item_type.as_deref().unwrap_or(&cur_type);
+        let effective_currency_str = payload.currency.as_deref().unwrap_or(&cur_currency);
         let effective_iap = payload
             .iap_product_id
             .as_deref()
             .or(cur_iap.as_deref());
         let effective_payload = payload.payload.as_ref().unwrap_or(&cur_payload);
+        let effective_type = ItemType::from_str(effective_type_str)
+            .map_err(|_| StatusCode::BAD_REQUEST)?;
+        let effective_currency = StoreCurrency::from_str(effective_currency_str)
+            .map_err(|_| StatusCode::BAD_REQUEST)?;
         validate_store_payload(effective_type, effective_currency, effective_iap, effective_payload)?;
     }
 
