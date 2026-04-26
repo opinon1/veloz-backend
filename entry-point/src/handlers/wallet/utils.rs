@@ -37,6 +37,10 @@ pub async fn adjust_balance(
             sqlx::Error::Database(db) if db.code().as_deref() == Some("23514") => {
                 StatusCode::UNPROCESSABLE_ENTITY // check constraint: insufficient funds
             }
+            // No wallet row for this user_id. Only reachable from admin flows
+            // that accept an arbitrary user_id (grant / override); authed-user
+            // flows always have a wallet row auto-created by the signup trigger.
+            sqlx::Error::RowNotFound => StatusCode::NOT_FOUND,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         })?;
 

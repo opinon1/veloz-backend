@@ -178,6 +178,31 @@ pub async fn update_profile(
     Path(user_id): Path<Uuid>,
     Json(payload): Json<UpdateProfileRequest>,
 ) -> Result<Json<ProfileRow>, StatusCode> {
+    // price_multiplier must be a finite, non-negative number. A negative
+    // multiplier would *credit* the user during a store purchase
+    // (cost * -1 → adjust_balance(+cost)). NaN/inf would silently corrupt
+    // the column.
+    if let Some(m) = payload.price_multiplier {
+        if !m.is_finite() || m < 0.0 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+    if let Some(lvl) = payload.account_level {
+        if lvl < 1 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+    if let Some(xp) = payload.total_xp {
+        if xp < 0 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+    if let Some(hs) = payload.main_highscore {
+        if hs < 0 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
     let row = sqlx::query_as::<_, ProfileRow>(
         r#"
         UPDATE profiles SET

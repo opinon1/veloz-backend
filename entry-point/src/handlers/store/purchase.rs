@@ -53,7 +53,15 @@ pub async fn purchase_item(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let adjusted_cost = ((cost as f64) * multiplier.0).round() as i64;
+    // Defense in depth against an admin saving a negative price_multiplier.
+    // Admin update validates this server-side, but clamp here as well so a
+    // negative multiplier can never *grant* the user money during purchase.
+    let raw_cost = (cost as f64) * multiplier.0;
+    let adjusted_cost = if raw_cost.is_finite() {
+        raw_cost.round().max(0.0) as i64
+    } else {
+        0
+    };
 
     let new_balance = if adjusted_cost > 0 {
         adjust_balance(
@@ -66,7 +74,15 @@ pub async fn purchase_item(
         )
         .await?
     } else {
-        0
+        // Free / multiplier-zeroed purchase. Return the actual current balance
+        // for the spend currency so clients render correct UI.
+        let q = format!("SELECT {col} FROM wallets WHERE user_id = $1", col = currency);
+        let (bal,): (i64,) = sqlx::query_as(&q)
+            .bind(session.user_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        bal
     };
 
     sqlx::query(

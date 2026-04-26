@@ -39,6 +39,13 @@ pub async fn create_skin(
     AdminClaims(_): AdminClaims,
     Json(payload): Json<CreateSkinRequest>,
 ) -> Result<(StatusCode, Json<SkinRow>), StatusCode> {
+    if !matches!(payload.currency.as_str(), "high" | "soft" | "energy") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if payload.cost < 0 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     let row = sqlx::query_as::<_, SkinRow>(
         r#"
         INSERT INTO skins (name, description, outfit_url, cost, currency, is_default, metadata)
@@ -133,15 +140,28 @@ pub async fn delete_skin(
     AdminClaims(_): AdminClaims,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, StatusCode> {
+    // Clear references from profiles.avatar_url before deleting; there is no
+    // FK on avatar_url (it's free-form text), so without this step users who
+    // had the skin equipped would keep a dangling UUID in their profile.
+    let mut tx = state.db.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    sqlx::query("UPDATE profiles SET avatar_url = NULL WHERE avatar_url = $1")
+        .bind(id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
     let result = sqlx::query("DELETE FROM skins WHERE id = $1")
         .bind(id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if result.rows_affected() == 0 {
         return Err(StatusCode::NOT_FOUND);
     }
+
+    tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(StatusCode::NO_CONTENT)
 }

@@ -167,6 +167,13 @@ pub async fn create_tier(
     Path(season_id): Path<Uuid>,
     Json(payload): Json<CreateTierRequest>,
 ) -> Result<(StatusCode, Json<TierRow>), StatusCode> {
+    // Tier numbers start at 1; xp_required must be non-negative. Without
+    // these checks an admin could insert tier=-3 or xp_required=-1 and
+    // players would be able to claim that tier on every run.
+    if payload.tier < 1 || payload.xp_required < 0 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     let row = sqlx::query_as::<_, TierRow>(
         r#"
         INSERT INTO bp_tiers (season_id, tier, xp_required, free_reward, premium_reward)
