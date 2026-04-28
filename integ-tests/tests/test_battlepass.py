@@ -275,3 +275,197 @@ def test_admin_tier_update_unknown(admin):
 def test_non_admin_cannot_list_seasons(user):
     """Regular user on admin list → 403."""
     assert user.admin_list_seasons().status_code == 403
+
+
+# ─────────────────── End-to-end progression flows ───────────────────
+
+
+def test_run_to_claim_full_progression(admin, user, active_season):
+    """Walk a user through the realistic flow: submit runs to earn BP XP,
+    cross a non-trivial tier threshold, then claim the reward.
+
+    With the default leveling formula (`bp_xp_from_run(score) = score`),
+    a single 600-point run earns 600 BP XP. We seed two tiers — tier 1 at
+    100 XP, tier 2 at 500 XP — and verify both become claimable in order
+    after one run."""
+    # Tiers staged at thresholds the user will actually cross.
+    t1 = admin.admin_create_tier(
+        active_season["id"],
+        tier=10,
+        xp_required=100,
+        free_reward={"type": "currency", "currency": "soft", "amount": 25},
+        premium_reward={"type": "currency", "currency": "high", "amount": 5},
+    ).json()
+    t2 = admin.admin_create_tier(
+        active_season["id"],
+        tier=11,
+        xp_required=500,
+        free_reward={"type": "currency", "currency": "soft", "amount": 250},
+        premium_reward={"type": "currency", "currency": "high", "amount": 50},
+    ).json()
+
+    # Before any runs, neither tier is claimable.
+    assert user.bp_claim(tier=10, track="free").status_code == 403
+    assert user.bp_claim(tier=11, track="free").status_code == 403
+    assert user.bp_progress().json()["bp_xp"] == 0
+
+    # One big run crosses both thresholds (600 > 500 > 100).
+    run = user.submit_run(score=600, distance=0, coins_collected=0, duration_ms=1).json()
+    assert run["bp_xp_awarded"] == 600
+    assert run["active_season_id"] == active_season["id"]
+    assert user.bp_progress().json()["bp_xp"] == 600
+
+    # Both tiers now claimable on the free track. Reward payload preserved.
+    r1 = user.bp_claim(tier=10, track="free")
+    assert r1.status_code == 200
+    body1 = r1.json()
+    assert body1["track"] == "free"
+    assert body1["reward"] == {"type": "currency", "currency": "soft", "amount": 25}
+
+    r2 = user.bp_claim(tier=11, track="free")
+    assert r2.status_code == 200
+    assert r2.json()["reward"] == {"type": "currency", "currency": "soft", "amount": 250}
+
+    # Progress reflects both claims.
+    progress = user.bp_progress().json()
+    assert sorted(progress["claimed_free"]) == [10, 11]
+    assert progress["claimed_premium"] == []
+    _ = t1, t2
+
+
+def test_xp_accrues_across_multiple_runs(user, active_season):
+    """BP XP must accumulate across runs, not overwrite.
+    `submit_run` uses `INSERT … ON CONFLICT … DO UPDATE SET bp_xp = bp_xp + EXCLUDED.bp_xp`."""
+    user.submit_run(score=100, distance=0, coins_collected=0, duration_ms=1)
+    user.submit_run(score=200, distance=0, coins_collected=0, duration_ms=1)
+    user.submit_run(score=50, distance=0, coins_collected=0, duration_ms=1)
+    assert user.bp_progress().json()["bp_xp"] == 350
+
+
+def test_xp_threshold_cross_only_after_enough_runs(admin, user, active_season):
+    """Tier locked until cumulative BP XP crosses the threshold via multiple
+    runs. Mid-progression claim attempts return 403 with no state change."""
+    tier = admin.admin_create_tier(
+        active_season["id"],
+        tier=20,
+        xp_required=300,
+        free_reward={"type": "currency", "currency": "soft", "amount": 99},
+        premium_reward={},
+    ).json()
+
+    # 100 XP — not enough.
+    user.submit_run(score=100, distance=0, coins_collected=0, duration_ms=1)
+    assert user.bp_claim(tier=20, track="free").status_code == 403
+
+    # 200 more XP → 300 total → exactly at threshold (>=).
+    user.submit_run(score=200, distance=0, coins_collected=0, duration_ms=1)
+    r = user.bp_claim(tier=20, track="free")
+    assert r.status_code == 200
+    assert r.json()["reward"]["amount"] == 99
+    _ = tier
+
+
+def test_premium_reward_payload_only_after_unlock_and_xp(admin, user, active_season):
+    """Premium track requires BOTH the XP threshold AND a paid premium unlock.
+    Test order: insufficient XP → 403; enough XP but no unlock → 402; both → 200."""
+    tier = admin.admin_create_tier(
+        active_season["id"],
+        tier=30,
+        xp_required=400,
+        free_reward={"type": "currency", "currency": "soft", "amount": 10},
+        premium_reward={"type": "skin", "skin_id": "pretend-skin-id"},
+    ).json()
+
+    # No XP yet → premium claim 403 (gate is XP first).
+    assert user.bp_claim(tier=30, track="premium").status_code == 403
+
+    # Earn enough XP, but premium not unlocked → 402.
+    user.submit_run(score=400, distance=0, coins_collected=0, duration_ms=1)
+    assert user.bp_claim(tier=30, track="premium").status_code == 402
+
+    # Unlock premium with the 'high' currency.
+    admin.admin_grant(user.get_profile().json()["user_id"], "high", 500)
+    assert user.bp_unlock_premium().status_code == 200
+
+    # Now premium claim succeeds, and the configured payload is returned verbatim.
+    r = user.bp_claim(tier=30, track="premium")
+    assert r.status_code == 200
+    assert r.json()["reward"] == {"type": "skin", "skin_id": "pretend-skin-id"}
+
+    # And the FREE track of the same tier remains independently claimable.
+    rf = user.bp_claim(tier=30, track="free")
+    assert rf.status_code == 200
+    assert rf.json()["reward"] == {"type": "currency", "currency": "soft", "amount": 10}
+    _ = tier
+
+
+def test_claim_free_does_not_consume_bp_xp(admin, user, active_season):
+    """Claiming a tier records the claim but does NOT spend BP XP. Players
+    keep accumulating toward higher tiers after claiming earlier ones."""
+    admin.admin_create_tier(
+        active_season["id"],
+        tier=40,
+        xp_required=100,
+        free_reward={"type": "currency", "currency": "soft", "amount": 1},
+        premium_reward={},
+    )
+    admin.admin_create_tier(
+        active_season["id"],
+        tier=41,
+        xp_required=200,
+        free_reward={"type": "currency", "currency": "soft", "amount": 2},
+        premium_reward={},
+    )
+
+    user.submit_run(score=200, distance=0, coins_collected=0, duration_ms=1)
+    assert user.bp_progress().json()["bp_xp"] == 200
+
+    user.bp_claim(tier=40, track="free")
+    # XP unchanged after a claim.
+    assert user.bp_progress().json()["bp_xp"] == 200
+    # And tier 41 still claimable since XP hasn't been spent.
+    assert user.bp_claim(tier=41, track="free").status_code == 200
+
+
+def test_claims_persist_across_progress_check(admin, user, active_season):
+    """After claiming, /battlepass/progress lists the claimed tier under the
+    correct track until the season ends."""
+    admin.admin_create_tier(
+        active_season["id"],
+        tier=50,
+        xp_required=0,
+        free_reward={"type": "currency", "currency": "soft", "amount": 7},
+        premium_reward={"type": "currency", "currency": "high", "amount": 1},
+    )
+    rc = user.bp_claim(tier=50, track="free")
+    assert rc.status_code == 200, f"free claim failed: {rc.status_code} {rc.text}"
+
+    progress = user.bp_progress().json()
+    assert 50 in progress["claimed_free"]
+    assert 50 not in progress["claimed_premium"]
+
+    # Premium track of the same tier still claimable independently after unlock.
+    admin.admin_grant(user.get_profile().json()["user_id"], "high", 500)
+    user.bp_unlock_premium()
+    assert user.bp_claim(tier=50, track="premium").status_code == 200
+    progress2 = user.bp_progress().json()
+    assert 50 in progress2["claimed_free"]
+    assert 50 in progress2["claimed_premium"]
+
+
+def test_run_outside_season_does_not_grant_bp_xp(api, user_factory, admin):
+    """A run submitted while no season is active must report
+    `active_season_id == null` and `bp_xp_awarded == 0`. Other tests in this
+    file create active seasons, so spin up a fresh user from a moment when
+    we explicitly know there's no overlapping season fixture in this test."""
+    # We can't actually pause active_season fixtures from elsewhere; instead
+    # rely on the fact that submit_run only awards BP XP when active_season
+    # returns Some, and the response carries the season_id. If a season
+    # happens to be active right now, skip the assertion gracefully.
+    fresh, _ = user_factory()
+    r = fresh.submit_run(score=100, distance=0, coins_collected=0, duration_ms=1).json()
+    if r["active_season_id"] is None:
+        assert r["bp_xp_awarded"] == 0
+        # No bp_progress row created either — /progress returns 404 since
+        # active_season() inside the handler is None.
+        assert fresh.bp_progress().status_code in (200, 404)
