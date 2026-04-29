@@ -18,15 +18,13 @@ body:json {
   {
     "tier": 1,
     "xp_required": 100,
-    "free_reward": {
-      "type": "currency",
-      "currency": "soft",
-      "amount": 50
-    },
-    "premium_reward": {
-      "type": "skin",
-      "skin_id": "{{skin_id}}"
-    }
+    "free_reward": [
+      { "type": "currency", "currency": "soft", "amount": 50 }
+    ],
+    "premium_reward": [
+      { "type": "currency", "currency": "high", "amount": 10 },
+      { "type": "skin", "skin_id": "{{skin_id}}" }
+    ]
   }
 }
 

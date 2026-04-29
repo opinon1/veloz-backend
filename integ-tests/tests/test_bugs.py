@@ -145,78 +145,91 @@ def test_signin_is_case_insensitive_on_email(api):
 # ─────────────────── [SILENT-FAIL] store payload validation ───────────────────
 
 
-def test_store_skin_item_rejects_invalid_uuid_at_create(admin):
-    """Admin cannot create a `skin`-type store item whose payload.skin_id is
-    not a valid UUID. Previously the purchase handler silently skipped
-    fulfillment on bad UUIDs, charging the user for nothing."""
+def test_store_skin_grant_rejects_invalid_uuid(admin):
+    """A skin grant with a non-UUID skin_id is rejected at admin create.
+    Previously the purchase handler silently skipped fulfillment on bad
+    UUIDs, charging the user for nothing."""
     r = admin.admin_create_store_item(
         name=rand_item_name("BadSkin"),
         item_type="skin",
         cost=50,
         currency="soft",
-        payload={"skin_id": "not-a-uuid"},
+        payload=[{"type": "skin", "skin_id": "not-a-uuid"}],
     )
     assert r.status_code == 400
 
 
-def test_store_skin_item_rejects_missing_skin_id(admin):
-    """Missing skin_id in payload also blocked at create time."""
+def test_store_payload_must_be_array(admin):
+    """The payload must be a JSON array of Grants. A bare object is rejected."""
     r = admin.admin_create_store_item(
-        name=rand_item_name("NoSkin"),
+        name=rand_item_name("BareObj"),
         item_type="skin",
         cost=50,
         currency="soft",
-        payload={},
+        payload={"type": "skin", "skin_id": "00000000-0000-0000-0000-000000000001"},
     )
     assert r.status_code == 400
 
 
-def test_store_currency_bundle_rejects_unknown_keys(admin):
-    """currency_bundle payloads must ONLY contain high/soft/energy.
-    `coins` (a typo) used to silently grant nothing."""
+def test_store_payload_must_not_be_empty(admin):
+    """An empty grant array is rejected — every store item must grant
+    something concrete or the purchase becomes a no-op."""
+    r = admin.admin_create_store_item(
+        name=rand_item_name("EmptyArr"),
+        item_type="custom",
+        cost=10,
+        currency="soft",
+        payload=[],
+    )
+    assert r.status_code == 400
+
+
+def test_store_currency_grant_rejects_unknown_currency(admin):
+    """Currency variants are restricted to high/soft/energy. `coins` rejected."""
     r = admin.admin_create_store_item(
         name=rand_item_name("TypoBundle"),
         item_type="currency_bundle",
         cost=10,
         currency="high",
-        payload={"coins": 500},
+        payload=[{"type": "currency", "currency": "coins", "amount": 500}],
     )
     assert r.status_code == 400
 
 
-def test_store_currency_bundle_rejects_non_positive_amounts(admin):
-    """Zero or negative grant amounts are nonsense and now rejected."""
+def test_store_currency_grant_rejects_non_positive_amounts(admin):
+    """Zero or negative grant amounts are nonsense and rejected at admin time."""
     r = admin.admin_create_store_item(
         name=rand_item_name("ZeroBundle"),
         item_type="currency_bundle",
         cost=10,
         currency="high",
-        payload={"soft": 0},
+        payload=[{"type": "currency", "currency": "soft", "amount": 0}],
     )
     assert r.status_code == 400
 
 
-def test_store_energy_refill_requires_amount(admin):
-    """energy_refill must declare a positive energy amount."""
+def test_store_grant_rejects_unknown_type(admin):
+    """Grant `type` is a closed set (currency, skin). `weird` rejected."""
     r = admin.admin_create_store_item(
-        name=rand_item_name("BadEnergy"),
-        item_type="energy_refill",
-        cost=5,
+        name=rand_item_name("WeirdGrant"),
+        item_type="custom",
+        cost=10,
         currency="soft",
-        payload={},
+        payload=[{"type": "weird", "stuff": 42}],
     )
     assert r.status_code == 400
 
 
 def test_store_unknown_item_type_rejected(admin):
-    """Item types outside the known set (skin/frame/currency_bundle/bp_unlock/
-    energy_refill/custom) are rejected."""
+    """Item-type label outside the closed enum is rejected, even with a
+    valid payload. (item_type drives admin filtering even though it no
+    longer drives fulfillment.)"""
     r = admin.admin_create_store_item(
         name=rand_item_name("Weird"),
         item_type="teleporter",
         cost=5,
         currency="soft",
-        payload={},
+        payload=[{"type": "currency", "currency": "soft", "amount": 1}],
     )
     assert r.status_code == 400
 
@@ -229,7 +242,7 @@ def test_store_iap_item_requires_product_id(admin):
         item_type="currency_bundle",
         cost=499,
         currency="iap",
-        payload={"high": 100},
+        payload=[{"type": "currency", "currency": "high", "amount": 100}],
     )
     assert r.status_code == 400
 
@@ -242,10 +255,10 @@ def test_store_validation_applies_to_update(admin):
         item_type="currency_bundle",
         cost=10,
         currency="high",
-        payload={"soft": 100},
+        payload=[{"type": "currency", "currency": "soft", "amount": 100}],
     ).json()
-    # Swap to a bad payload for the same item_type.
-    r = admin.admin_update_store_item(good["id"], payload={"coins": 1})
+    # Swap to a bad payload (object instead of array).
+    r = admin.admin_update_store_item(good["id"], payload={"type": "currency"})
     assert r.status_code == 400
 
 
@@ -377,7 +390,7 @@ def test_store_purchase_with_zero_multiplier_is_free_and_returns_real_balance(ad
         item_type="currency_bundle",
         cost=100,
         currency="high",
-        payload={"soft": 50},
+        payload=[{"type": "currency", "currency": "soft", "amount": 50}],
     ).json()
     r = user.purchase_store_item(item["id"])
     assert r.status_code == 200

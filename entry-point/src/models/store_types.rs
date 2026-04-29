@@ -123,3 +123,54 @@ impl FromStr for StoreCurrency {
         })
     }
 }
+
+/// One thing the server can grant a player. Elements of:
+/// - `store_items.payload` — drives fulfillment on purchase.
+/// - `bp_tiers.free_reward` / `premium_reward` — returned to the client on
+///   claim (records-only; client + game server apply the grants).
+///
+/// Wire format is internally tagged:
+///   `{"type":"currency","currency":"soft","amount":500}`
+///   `{"type":"skin","skin_id":"<uuid>"}`
+///
+/// Adding a new variant produces compile errors at every `match Grant {}` site.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Grant {
+    Currency { currency: Currency, amount: i64 },
+    Skin { skin_id: uuid::Uuid },
+}
+
+impl Grant {
+    /// Cheap shape check (positive amounts, etc.). Doesn't touch DB —
+    /// callers still need to verify FK existence (skin still exists/active).
+    pub fn validate_shape(&self) -> Result<(), &'static str> {
+        match self {
+            Grant::Currency { amount, .. } => {
+                if *amount <= 0 {
+                    return Err("currency amount must be > 0");
+                }
+            }
+            Grant::Skin { .. } => {}
+        }
+        Ok(())
+    }
+}
+
+/// Parse + validate a `Vec<Grant>` payload from raw JSON. Empty arrays are
+/// rejected — every store item / BP tier reward must grant something
+/// concrete or the whole "you bought a thing" flow becomes a no-op.
+pub fn validate_grants(json: &serde_json::Value) -> Result<Vec<Grant>, &'static str> {
+    let arr = json.as_array().ok_or("grants must be a JSON array")?;
+    if arr.is_empty() {
+        return Err("grants array must not be empty");
+    }
+    let mut out = Vec::with_capacity(arr.len());
+    for v in arr {
+        let g: Grant = serde_json::from_value(v.clone())
+            .map_err(|_| "invalid grant element")?;
+        g.validate_shape()?;
+        out.push(g);
+    }
+    Ok(out)
+}

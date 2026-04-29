@@ -167,12 +167,15 @@ pub async fn create_tier(
     Path(season_id): Path<Uuid>,
     Json(payload): Json<CreateTierRequest>,
 ) -> Result<(StatusCode, Json<TierRow>), StatusCode> {
-    // Tier numbers start at 1; xp_required must be non-negative. Without
-    // these checks an admin could insert tier=-3 or xp_required=-1 and
-    // players would be able to claim that tier on every run.
+    // Tier numbers start at 1; xp_required must be non-negative.
     if payload.tier < 1 || payload.xp_required < 0 {
         return Err(StatusCode::BAD_REQUEST);
     }
+    // Both reward tracks must be valid Grant arrays. Empty arrays rejected.
+    crate::models::store_types::validate_grants(&payload.free_reward)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    crate::models::store_types::validate_grants(&payload.premium_reward)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let row = sqlx::query_as::<_, TierRow>(
         r#"
@@ -220,12 +223,33 @@ pub struct UpdateTierRequest {
     pub premium_reward: Option<serde_json::Value>,
 }
 
+fn validate_optional_grants(v: &Option<serde_json::Value>) -> Result<(), StatusCode> {
+    if let Some(json) = v {
+        crate::models::store_types::validate_grants(json)
+            .map_err(|_| StatusCode::BAD_REQUEST)?;
+    }
+    Ok(())
+}
+
 pub async fn update_tier(
     State(state): State<AppState>,
     AdminClaims(_): AdminClaims,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateTierRequest>,
 ) -> Result<Json<TierRow>, StatusCode> {
+    if let Some(t) = payload.tier {
+        if t < 1 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+    if let Some(xp) = payload.xp_required {
+        if xp < 0 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+    validate_optional_grants(&payload.free_reward)?;
+    validate_optional_grants(&payload.premium_reward)?;
+
     let row = sqlx::query_as::<_, TierRow>(
         r#"
         UPDATE bp_tiers SET

@@ -4,19 +4,18 @@ use std::str::FromStr;
 use uuid::Uuid;
 use crate::state::AppState;
 use crate::extractors::AdminClaims;
-use crate::models::store_types::{Currency, ItemType, StoreCurrency};
+use crate::models::store_types::{ItemType, StoreCurrency, validate_grants};
 
-/// Validates a store item's currency + item_type combo and confirms the
-/// payload shape matches the declared type. Called on create and update so
-/// purchase-time fulfillment can assume the payload is well-formed.
+/// Validates a store item's payload structure. The payload is now an array of
+/// `Grant`s (`{"type": "currency", ...} | {"type": "skin", ...}`), so a
+/// single store item can ship multiple things at once (e.g. skin + 100 soft).
 ///
-/// Fails fast at admin-time (400) instead of silently skipping fulfillment
-/// at purchase-time (which would charge the user but grant nothing).
-///
-/// Inputs are typed enums — adding a new `ItemType` variant produces a
-/// compile error here until it's handled.
+/// `item_type` is now informational (admin-defined display category) and no
+/// longer drives fulfillment — the payload array does. We still validate that
+/// the *kind* declared via `item_type` and `currency` is internally consistent
+/// (IAP needs a product id; non-IAP needs a wallet currency).
 fn validate_store_payload(
-    item_type: ItemType,
+    _item_type: ItemType,
     currency: StoreCurrency,
     iap_product_id: Option<&str>,
     payload: &serde_json::Value,
@@ -26,45 +25,7 @@ fn validate_store_payload(
     {
         return Err(StatusCode::BAD_REQUEST);
     }
-
-    match item_type {
-        ItemType::Skin => {
-            let sid = payload
-                .get("skin_id")
-                .and_then(|v| v.as_str())
-                .ok_or(StatusCode::BAD_REQUEST)?;
-            Uuid::parse_str(sid).map_err(|_| StatusCode::BAD_REQUEST)?;
-        }
-        ItemType::CurrencyBundle => {
-            let obj = payload.as_object().ok_or(StatusCode::BAD_REQUEST)?;
-            let mut granted_any = false;
-            for (k, v) in obj {
-                // Each key must parse as a wallet Currency, and the value
-                // must be a positive integer.
-                Currency::from_str(k).map_err(|_| StatusCode::BAD_REQUEST)?;
-                let amt = v.as_i64().ok_or(StatusCode::BAD_REQUEST)?;
-                if amt <= 0 {
-                    return Err(StatusCode::BAD_REQUEST);
-                }
-                granted_any = true;
-            }
-            if !granted_any {
-                return Err(StatusCode::BAD_REQUEST);
-            }
-        }
-        ItemType::EnergyRefill => {
-            let amt = payload
-                .get("energy")
-                .and_then(|v| v.as_i64())
-                .ok_or(StatusCode::BAD_REQUEST)?;
-            if amt <= 0 {
-                return Err(StatusCode::BAD_REQUEST);
-            }
-        }
-        ItemType::Frame | ItemType::BpUnlock | ItemType::Custom => {
-            // No server-side fulfillment; payload is opaque for the frontend.
-        }
-    }
+    validate_grants(payload).map_err(|_| StatusCode::BAD_REQUEST)?;
     Ok(())
 }
 

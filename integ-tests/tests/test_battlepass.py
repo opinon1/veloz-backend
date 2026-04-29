@@ -36,8 +36,8 @@ def tier_cheap(admin, active_season):
         active_season["id"],
         tier=1,
         xp_required=0,
-        free_reward={"type": "currency", "currency": "soft", "amount": 50},
-        premium_reward={"type": "currency", "currency": "high", "amount": 10},
+        free_reward=[{"type": "currency", "currency": "soft", "amount": 50}],
+        premium_reward=[{"type": "currency", "currency": "high", "amount": 10}],
     )
     assert r.status_code == 201
     return r.json()
@@ -50,8 +50,8 @@ def tier_expensive(admin, active_season):
         active_season["id"],
         tier=2,
         xp_required=10**9,
-        free_reward={"type": "currency", "currency": "soft", "amount": 500},
-        premium_reward={"type": "currency", "currency": "high", "amount": 100},
+        free_reward=[{"type": "currency", "currency": "soft", "amount": 500}],
+        premium_reward=[{"type": "currency", "currency": "high", "amount": 100}],
     )
     assert r.status_code == 201
     return r.json()
@@ -108,13 +108,14 @@ def test_bp_progress_defaults_zero(user, active_season):
 
 
 def test_claim_free_tier_happy(user, active_season, tier_cheap):
-    """xp_required=0 → claim works immediately. Response echoes reward payload."""
+    """xp_required=0 → claim works immediately. Response echoes the reward
+    array verbatim (records-only — clients/game server applies the grants)."""
     r = user.bp_claim(tier=1, track="free")
     assert r.status_code == 200
     body = r.json()
     assert body["tier"] == 1
     assert body["track"] == "free"
-    assert body["reward"]["amount"] == 50
+    assert body["reward"] == [{"type": "currency", "currency": "soft", "amount": 50}]
 
 
 def test_double_claim_rejected(user, active_season, tier_cheap):
@@ -293,15 +294,15 @@ def test_run_to_claim_full_progression(admin, user, active_season):
         active_season["id"],
         tier=10,
         xp_required=100,
-        free_reward={"type": "currency", "currency": "soft", "amount": 25},
-        premium_reward={"type": "currency", "currency": "high", "amount": 5},
+        free_reward=[{"type": "currency", "currency": "soft", "amount": 25}],
+        premium_reward=[{"type": "currency", "currency": "high", "amount": 5}],
     ).json()
     t2 = admin.admin_create_tier(
         active_season["id"],
         tier=11,
         xp_required=500,
-        free_reward={"type": "currency", "currency": "soft", "amount": 250},
-        premium_reward={"type": "currency", "currency": "high", "amount": 50},
+        free_reward=[{"type": "currency", "currency": "soft", "amount": 250}],
+        premium_reward=[{"type": "currency", "currency": "high", "amount": 50}],
     ).json()
 
     # Before any runs, neither tier is claimable.
@@ -320,11 +321,11 @@ def test_run_to_claim_full_progression(admin, user, active_season):
     assert r1.status_code == 200
     body1 = r1.json()
     assert body1["track"] == "free"
-    assert body1["reward"] == {"type": "currency", "currency": "soft", "amount": 25}
+    assert body1["reward"] == [{"type": "currency", "currency": "soft", "amount": 25}]
 
     r2 = user.bp_claim(tier=11, track="free")
     assert r2.status_code == 200
-    assert r2.json()["reward"] == {"type": "currency", "currency": "soft", "amount": 250}
+    assert r2.json()["reward"] == [{"type": "currency", "currency": "soft", "amount": 250}]
 
     # Progress reflects both claims.
     progress = user.bp_progress().json()
@@ -349,8 +350,8 @@ def test_xp_threshold_cross_only_after_enough_runs(admin, user, active_season):
         active_season["id"],
         tier=20,
         xp_required=300,
-        free_reward={"type": "currency", "currency": "soft", "amount": 99},
-        premium_reward={},
+        free_reward=[{"type": "currency", "currency": "soft", "amount": 99}],
+        premium_reward=[{"type": "currency", "currency": "high", "amount": 1}],
     ).json()
 
     # 100 XP — not enough.
@@ -361,19 +362,20 @@ def test_xp_threshold_cross_only_after_enough_runs(admin, user, active_season):
     user.submit_run(score=200, distance=0, coins_collected=0, duration_ms=1)
     r = user.bp_claim(tier=20, track="free")
     assert r.status_code == 200
-    assert r.json()["reward"]["amount"] == 99
+    assert r.json()["reward"][0]["amount"] == 99
     _ = tier
 
 
 def test_premium_reward_payload_only_after_unlock_and_xp(admin, user, active_season):
     """Premium track requires BOTH the XP threshold AND a paid premium unlock.
     Test order: insufficient XP → 403; enough XP but no unlock → 402; both → 200."""
+    pretend_skin = "00000000-0000-0000-0000-000000000abc"
     tier = admin.admin_create_tier(
         active_season["id"],
         tier=30,
         xp_required=400,
-        free_reward={"type": "currency", "currency": "soft", "amount": 10},
-        premium_reward={"type": "skin", "skin_id": "pretend-skin-id"},
+        free_reward=[{"type": "currency", "currency": "soft", "amount": 10}],
+        premium_reward=[{"type": "skin", "skin_id": pretend_skin}],
     ).json()
 
     # No XP yet → premium claim 403 (gate is XP first).
@@ -390,12 +392,12 @@ def test_premium_reward_payload_only_after_unlock_and_xp(admin, user, active_sea
     # Now premium claim succeeds, and the configured payload is returned verbatim.
     r = user.bp_claim(tier=30, track="premium")
     assert r.status_code == 200
-    assert r.json()["reward"] == {"type": "skin", "skin_id": "pretend-skin-id"}
+    assert r.json()["reward"] == [{"type": "skin", "skin_id": pretend_skin}]
 
     # And the FREE track of the same tier remains independently claimable.
     rf = user.bp_claim(tier=30, track="free")
     assert rf.status_code == 200
-    assert rf.json()["reward"] == {"type": "currency", "currency": "soft", "amount": 10}
+    assert rf.json()["reward"] == [{"type": "currency", "currency": "soft", "amount": 10}]
     _ = tier
 
 
@@ -406,15 +408,15 @@ def test_claim_free_does_not_consume_bp_xp(admin, user, active_season):
         active_season["id"],
         tier=40,
         xp_required=100,
-        free_reward={"type": "currency", "currency": "soft", "amount": 1},
-        premium_reward={},
+        free_reward=[{"type": "currency", "currency": "soft", "amount": 1}],
+        premium_reward=[{"type": "currency", "currency": "high", "amount": 1}],
     )
     admin.admin_create_tier(
         active_season["id"],
         tier=41,
         xp_required=200,
-        free_reward={"type": "currency", "currency": "soft", "amount": 2},
-        premium_reward={},
+        free_reward=[{"type": "currency", "currency": "soft", "amount": 2}],
+        premium_reward=[{"type": "currency", "currency": "high", "amount": 2}],
     )
 
     user.submit_run(score=200, distance=0, coins_collected=0, duration_ms=1)
@@ -434,8 +436,8 @@ def test_claims_persist_across_progress_check(admin, user, active_season):
         active_season["id"],
         tier=50,
         xp_required=0,
-        free_reward={"type": "currency", "currency": "soft", "amount": 7},
-        premium_reward={"type": "currency", "currency": "high", "amount": 1},
+        free_reward=[{"type": "currency", "currency": "soft", "amount": 7}],
+        premium_reward=[{"type": "currency", "currency": "high", "amount": 1}],
     )
     rc = user.bp_claim(tier=50, track="free")
     assert rc.status_code == 200, f"free claim failed: {rc.status_code} {rc.text}"

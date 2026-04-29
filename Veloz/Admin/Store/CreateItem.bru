@@ -16,15 +16,17 @@ auth:bearer {
 
 body:json {
   {
-    "name": "Coin Bundle S",
-    "description": "500 soft coins",
-    "item_type": "currency_bundle",
+    "name": "Starter Pack",
+    "description": "1 skin + 500 soft + 5 energy",
+    "item_type": "custom",
     "cost": 10,
     "currency": "high",
     "iap_product_id": null,
-    "payload": {
-      "soft": 500
-    },
+    "payload": [
+      { "type": "skin", "skin_id": "{{skin_id}}" },
+      { "type": "currency", "currency": "soft", "amount": 500 },
+      { "type": "currency", "currency": "energy", "amount": 5 }
+    ],
     "metadata": {
       "badge": "popular"
     }

@@ -1,9 +1,9 @@
-//! Generic store purchase. Charges the authed user for a store_item in whatever
-//! currency the item declares (high/soft/energy), applies `profile.price_multiplier`,
-//! and fulfills the item server-side based on `item_type` + `payload`.
+//! Generic store purchase. Charges the authed user `cost * price_multiplier`
+//! in the item's wallet currency, then iterates the item's payload (an array
+//! of `Grant`s) and applies each one in the same transaction.
 //!
-//! `currency = 'iap'` items are NOT handled here — those go through `/wallet/iap/purchase`
-//! for receipt verification.
+//! `currency = "iap"` items don't go through this endpoint — they require
+//! receipt validation and are fulfilled by `/wallet/iap/purchase`.
 
 use axum::{extract::{Path, State}, Json, http::StatusCode};
 use serde::Serialize;
@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::state::AppState;
 use crate::extractors::Claims;
 use crate::handlers::wallet::utils::adjust_balance;
-use crate::models::store_types::{Currency, ItemType, StoreCurrency};
+use crate::models::store_types::{Grant, StoreCurrency, validate_grants};
 
 #[derive(Serialize)]
 pub struct PurchaseItemResponse {
@@ -30,32 +30,31 @@ pub async fn purchase_item(
 ) -> Result<Json<PurchaseItemResponse>, StatusCode> {
     let mut tx = state.db.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let item: Option<(i64, String, String, serde_json::Value, bool)> = sqlx::query_as(
-        "SELECT cost, currency, item_type, payload, is_active FROM store_items WHERE id = $1",
+    let item: Option<(i64, String, serde_json::Value, bool)> = sqlx::query_as(
+        "SELECT cost, currency, payload, is_active FROM store_items WHERE id = $1",
     )
     .bind(item_id)
     .fetch_optional(&mut *tx)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let (cost, currency_str, item_type_str, payload, is_active) =
-        item.ok_or(StatusCode::NOT_FOUND)?;
+    let (cost, currency_str, payload, is_active) = item.ok_or(StatusCode::NOT_FOUND)?;
     if !is_active {
         return Err(StatusCode::GONE);
     }
 
-    // Parse the persisted text into typed enums. validate_store_payload at
-    // admin-time guarantees these always parse, but treat unexpected DB rows
-    // as 500 rather than panicking.
     let currency = StoreCurrency::from_str(&currency_str)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let item_type = ItemType::from_str(&item_type_str)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
     // IAP-priced items must go through /wallet/iap/purchase, not this endpoint.
     let wallet_currency = currency.as_wallet_currency().ok_or(StatusCode::BAD_REQUEST)?;
 
-    // Apply per-user price multiplier.
+    // Parse the persisted payload into a Vec<Grant>. Admin-time validation
+    // already guaranteed this — fall through to 500 only if the row was
+    // tampered with after creation.
+    let grants = validate_grants(&payload).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Apply per-user price multiplier. Defense-in-depth clamp at >= 0 in case
+    // a negative multiplier slipped past the admin-side guard.
     let multiplier: (f64,) = sqlx::query_as(
         "SELECT price_multiplier FROM profiles WHERE user_id = $1",
     )
@@ -64,9 +63,6 @@ pub async fn purchase_item(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Defense in depth against an admin saving a negative price_multiplier.
-    // Admin update validates this server-side, but clamp here as well so a
-    // negative multiplier can never *grant* the user money during purchase.
     let raw_cost = (cost as f64) * multiplier.0;
     let adjusted_cost = if raw_cost.is_finite() {
         raw_cost.round().max(0.0) as i64
@@ -85,8 +81,8 @@ pub async fn purchase_item(
         )
         .await?
     } else {
-        // Free / multiplier-zeroed purchase. Return actual current balance
-        // for the spend currency so clients render correct UI.
+        // Free / multiplier-zeroed purchase: return actual current balance
+        // for the spend currency so clients render accurate UI.
         let q = format!(
             "SELECT {col} FROM wallets WHERE user_id = $1",
             col = wallet_currency.as_str()
@@ -111,63 +107,11 @@ pub async fn purchase_item(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Fulfillment dispatched on the typed item_type. Adding a new ItemType
-    // variant produces a non-exhaustive-match compile error here, forcing
-    // the developer to make a deliberate choice (real fulfillment vs. opaque).
-    match item_type {
-        ItemType::Skin => {
-            // Validation guarantees skin_id is present and parses; INTERNAL on
-            // anything else (would mean the row was tampered with post-create).
-            let skin_id_str = payload
-                .get("skin_id")
-                .and_then(|v| v.as_str())
-                .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-            let skin_id = Uuid::parse_str(skin_id_str)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            sqlx::query(
-                "INSERT INTO user_skins (user_id, skin_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-            )
-            .bind(session.user_id)
-            .bind(skin_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        ItemType::CurrencyBundle => {
-            // payload: { "high": 100 } or { "soft": 500, "energy": 10 }
-            for cur in [Currency::High, Currency::Soft, Currency::Energy] {
-                if let Some(amt) = payload.get(cur.as_str()).and_then(|v| v.as_i64()) {
-                    if amt > 0 {
-                        adjust_balance(
-                            &mut tx,
-                            session.user_id,
-                            cur.as_str(),
-                            amt,
-                            "store_bundle",
-                            Some(&item_id.to_string()),
-                        )
-                        .await?;
-                    }
-                }
-            }
-        }
-        ItemType::EnergyRefill => {
-            let amt = payload.get("energy").and_then(|v| v.as_i64()).unwrap_or(0);
-            if amt > 0 {
-                adjust_balance(
-                    &mut tx,
-                    session.user_id,
-                    Currency::Energy.as_str(),
-                    amt,
-                    "energy_refill",
-                    Some(&item_id.to_string()),
-                )
-                .await?;
-            }
-        }
-        ItemType::Frame | ItemType::BpUnlock | ItemType::Custom => {
-            // Frontend handles via payload/metadata; no server-side fulfillment.
-        }
+    // Fulfillment: iterate the grants array and apply each in the same tx.
+    // Adding a new Grant variant produces a compile error in `apply_grant`,
+    // forcing the developer to choose how it's fulfilled.
+    for g in &grants {
+        apply_grant(&mut tx, session.user_id, g, item_id).await?;
     }
 
     tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -179,4 +123,38 @@ pub async fn purchase_item(
         new_balance,
         payload,
     }))
+}
+
+/// Apply one Grant atomically inside the caller's transaction. Idempotent
+/// where the underlying schema permits (e.g. user_skins ON CONFLICT DO NOTHING).
+async fn apply_grant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    grant: &Grant,
+    reference_id: Uuid,
+) -> Result<(), StatusCode> {
+    match grant {
+        Grant::Currency { currency, amount } => {
+            adjust_balance(
+                tx,
+                user_id,
+                currency.as_str(),
+                *amount,
+                "store_grant",
+                Some(&reference_id.to_string()),
+            )
+            .await?;
+        }
+        Grant::Skin { skin_id } => {
+            sqlx::query(
+                "INSERT INTO user_skins (user_id, skin_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            )
+            .bind(user_id)
+            .bind(skin_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+    }
+    Ok(())
 }
