@@ -5,7 +5,7 @@ mod extractors;
 mod models;
 mod leveling;
 
-use axum::Router;
+use axum::{routing::get, Router};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use state::AppState;
 use tower_http::trace::TraceLayer;
@@ -42,7 +42,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let redis_host = std::env::var("REDIS_HOST").expect("REDIS_HOST missing");
     let redis_port = std::env::var("REDIS_PORT").expect("REDIS_PORT missing");
     let redis_password = url_encode(&std::env::var("REDIS_PASSWORD").expect("REDIS_PASSWORD missing"));
-    let redis_url = format!("redis://:{}@{}:{}", redis_password, redis_host, redis_port);
+    let redis_scheme = if std::env::var("REDIS_TLS").as_deref() == Ok("true") {
+        "rediss"
+    } else {
+        "redis"
+    };
+    let redis_url = format!("{}://:{}@{}:{}", redis_scheme, redis_password, redis_host, redis_port);
 
     tracing::info!("Connecting to Postgres...");
     let pool = PgPoolOptions::new().connect_with(db_opts).await?;
@@ -64,6 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let app = Router::new()
+        .route("/health", get(|| async { "ok" }))
         .nest("/auth", handlers::auth::router::router(&state))
         .nest("/profile", handlers::profile::router::router())
         .nest("/wallet", handlers::wallet::router::router())

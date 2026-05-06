@@ -1,0 +1,93 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+env:
+  AWS_REGION: us-west-1
+  ECR_REPO: veloz
+  ECS_CLUSTER: veloz
+  ECS_SERVICE: VelozStack-Service
+  IMAGE_NAME: veloz
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  test:
+    name: integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy example env
+        run: cp example.env .env
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Run integ tests (docker stack managed by pytest)
+        working-directory: integ-tests
+        env:
+          INTEG_REBUILD: "1"
+          INTEG_RESET: "1"
+        run: uv run pytest -n auto
+
+      - name: Dump app logs on failure
+        if: failure()
+        run: docker compose logs entry-point
+
+  build-and-deploy:
+    name: build + deploy
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build + push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./entry-point
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ github.sha }}
+            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Force ECS redeploy
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$(aws ecs list-services --cluster "$ECS_CLUSTER" --query 'serviceArns[0]' --output text | awk -F'/' '{print $NF}')" \
+            --force-new-deployment \
+            --region "$AWS_REGION"
+
+      - name: Wait for service stable
+        run: |
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$(aws ecs list-services --cluster "$ECS_CLUSTER" --query 'serviceArns[0]' --output text | awk -F'/' '{print $NF}')" \
+            --region "$AWS_REGION"
