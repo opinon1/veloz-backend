@@ -27,19 +27,25 @@ jobs:
       - name: Copy example env
         run: cp example.env .env
 
+      - name: Build + start stack (output streams to CI log)
+        run: docker compose up -d --build --wait
+
       - name: Install uv
         uses: astral-sh/setup-uv@v3
 
-      - name: Run integ tests (docker stack managed by pytest)
+      - name: Run integ tests
         working-directory: integ-tests
         env:
-          INTEG_REBUILD: "1"
-          INTEG_RESET: "1"
+          INTEG_NO_DOCKER: "1"
         run: uv run pytest -n auto
 
-      - name: Dump app logs on failure
+      - name: Dump container logs on failure
         if: failure()
-        run: docker compose logs entry-point
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
 
   build-and-deploy:
     name: build + deploy
