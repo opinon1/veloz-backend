@@ -78,6 +78,8 @@ export class GithubOidcStack extends cdk.Stack {
           "ecs:RegisterTaskDefinition",
           "ecs:DescribeTasks",
           "ecs:ListTasks",
+          "ecs:ListServices",
+          "ecs:ListClusters",
         ],
         resources: ["*"],
       })
