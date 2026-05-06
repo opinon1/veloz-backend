@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import * as cdk from "aws-cdk-lib";
 import { VelozStack } from "../lib/veloz-stack";
+import { VelozEcrStack } from "../lib/veloz-ecr-stack";
 import { GithubOidcStack } from "../lib/github-oidc-stack";
 
 const app = new cdk.App();
@@ -19,6 +20,9 @@ new GithubOidcStack(app, "VelozGithubOidc", {
   githubRepo,
 });
 
+const ecrStack = new VelozEcrStack(app, "VelozEcrStack", { env });
+
 new VelozStack(app, "VelozStack", {
   env,
+  repositoryName: ecrStack.repositoryName,
 });

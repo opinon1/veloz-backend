@@ -10,8 +10,12 @@ import * as elasticache from "aws-cdk-lib/aws-elasticache";
 import * as secrets from "aws-cdk-lib/aws-secretsmanager";
 import * as iam from "aws-cdk-lib/aws-iam";
 
+interface VelozStackProps extends cdk.StackProps {
+  repositoryName: string;
+}
+
 export class VelozStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+  constructor(scope: Construct, id: string, props: VelozStackProps) {
     super(scope, id, props);
 
     // ──────────────────────────────────────────────────────────
@@ -39,16 +43,15 @@ export class VelozStack extends cdk.Stack {
     });
 
     // ──────────────────────────────────────────────────────────
-    // ECR: holds the veloz app image. CI pushes here.
+    // ECR: imported from VelozEcrStack so the registry exists (and
+    // the first image has been pushed) before this stack tries to
+    // start the ECS service.
     // ──────────────────────────────────────────────────────────
-    const repo = new ecr.Repository(this, "Repo", {
-      repositoryName: "veloz",
-      imageScanOnPush: true,
-      lifecycleRules: [
-        { maxImageCount: 10, description: "Keep last 10 images" },
-      ],
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-    });
+    const repo = ecr.Repository.fromRepositoryName(
+      this,
+      "Repo",
+      props.repositoryName
+    );
 
     // ──────────────────────────────────────────────────────────
     // Secrets: DB password (auto-generated), Redis auth token.
