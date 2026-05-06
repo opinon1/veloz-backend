@@ -85,14 +85,14 @@ export class VelozStack extends cdk.Stack {
       description: "RDS Postgres SG",
       allowAllOutbound: false,
     });
-    dbSg.addIngressRule(taskSg, ec2.Port.tcp(5432), "task → pg");
+    dbSg.addIngressRule(taskSg, ec2.Port.tcp(5432), "task to pg");
 
     const redisSg = new ec2.SecurityGroup(this, "RedisSg", {
       vpc,
       description: "ElastiCache Redis SG",
       allowAllOutbound: false,
     });
-    redisSg.addIngressRule(taskSg, ec2.Port.tcp(6379), "task → redis");
+    redisSg.addIngressRule(taskSg, ec2.Port.tcp(6379), "task to redis");
 
     // ──────────────────────────────────────────────────────────
     // RDS Postgres 17, db.t4g.micro, Single-AZ, isolated subnets.
@@ -226,7 +226,7 @@ export class VelozStack extends cdk.Stack {
       ],
       circuitBreaker: { rollback: true },
       enableExecuteCommand: true,
-      // 100/200: rolling deploy starts new task before stopping old → zero
+      // 100/200: rolling deploy starts new task before stopping old to zero
       // downtime even at desiredCount=1.
       minHealthyPercent: 100,
       maxHealthyPercent: 200,
@@ -250,7 +250,7 @@ export class VelozStack extends cdk.Stack {
     });
 
     // ──────────────────────────────────────────────────────────
-    // ALB (HTTP only, port 80 → task port 81).
+    // ALB (HTTP only, port 80 to task port 81).
     // ──────────────────────────────────────────────────────────
     const alb = new elbv2.ApplicationLoadBalancer(this, "Alb", {
       vpc,
@@ -279,11 +279,11 @@ export class VelozStack extends cdk.Stack {
       deregistrationDelay: cdk.Duration.seconds(15),
     });
 
-    // ALB SG → task SG on port 81.
+    // ALB SG to task SG on port 81.
     taskSg.addIngressRule(
       ec2.Peer.securityGroupId(alb.connections.securityGroups[0].securityGroupId),
       ec2.Port.tcp(81),
-      "ALB → task"
+      "ALB to task"
     );
 
     // ──────────────────────────────────────────────────────────
