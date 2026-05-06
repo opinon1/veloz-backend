@@ -39,7 +39,10 @@ jobs:
         working-directory: integ-tests
         env:
           INTEG_NO_DOCKER: "1"
-        run: uv run pytest -n auto
+        # Serial: battlepass tests share the "active season" fixture and
+        # multiple parallel workers race to be the active one, which fails
+        # `assert run["active_season_id"] == active_season["id"]`.
+        run: uv run pytest
 
       - name: Dump container logs on failure
         if: failure()
