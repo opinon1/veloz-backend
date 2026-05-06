@@ -32,30 +32,36 @@ Run from your laptop. Needs AWS creds (`aws sts get-caller-identity` should alre
 cd infra
 npm install
 
-# Bootstrap CDK in the target account/region (one-time per account/region):
+# 1. Bootstrap CDK in the target account/region (one-time):
 npx cdk bootstrap aws://346481751619/us-west-1
 
-# Deploy the OIDC stack first (creates the role GH Actions will assume):
+# 2. OIDC stack — creates GithubActionsDeployRole:
 npx cdk deploy VelozGithubOidc
+gh secret set AWS_DEPLOY_ROLE_ARN -b "<DeployRoleArn output>"
 
-# Note the DeployRoleArn output. Add it as a GitHub secret:
-#   gh secret set AWS_DEPLOY_ROLE_ARN -b "<arn>"
+# 3. ECR stack — creates the registry:
+npx cdk deploy VelozEcrStack
 
-# Deploy the app stack:
+# 4. Build + push the FIRST image (the app stack expects veloz:latest to
+#    exist before the ECS service starts; otherwise the deploy circuit
+#    breaker fires on the initial pull):
+aws ecr get-login-password --region us-west-1 \
+  | docker login --username AWS --password-stdin \
+      346481751619.dkr.ecr.us-west-1.amazonaws.com
+docker buildx build --platform linux/arm64 \
+  -t 346481751619.dkr.ecr.us-west-1.amazonaws.com/veloz:latest \
+  --push ../entry-point
+
+# 5. App stack (RDS + ElastiCache provisioning is slow — ~10 min):
 npx cdk deploy VelozStack
 ```
 
 Outputs after `VelozStack`:
 
 - `AlbDns` — public hostname. App reachable at `http://<AlbDns>/`.
-- `RepoUri` — ECR URI for image pushes.
+- `RepoUri` — ECR URI for image pushes (same as VelozEcrStack output).
 - `ClusterName` / `ServiceName` — for `aws ecs update-service`.
 - `DbEndpoint` / `RedisEndpoint` — internal-only.
-
-> The first `cdk deploy VelozStack` will fail to start the ECS task because the
-> `veloz:latest` image doesn't exist in ECR yet. Push a first image (the GH
-> Actions workflow will do this on the next master push), then ECS will pull
-> and start.
 
 ## CI/CD
 
