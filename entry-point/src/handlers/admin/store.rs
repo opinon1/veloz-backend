@@ -64,6 +64,9 @@ pub async fn create_item(
     AdminClaims(_): AdminClaims,
     Json(payload): Json<CreateItemRequest>,
 ) -> Result<(StatusCode, Json<StoreItemRow>), StatusCode> {
+    if payload.cost < 0 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     let item_type = ItemType::from_str(&payload.item_type)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
     let currency = StoreCurrency::from_str(&payload.currency)
@@ -130,6 +133,11 @@ pub async fn update_item(
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateItemRequest>,
 ) -> Result<Json<StoreItemRow>, StatusCode> {
+    if let Some(c) = payload.cost {
+        if c < 0 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
     // If the update touches item_type/currency/payload/iap_product_id, we need
     // the full effective tuple to validate. Merge the provided fields with the
     // current row so partial updates don't bypass validation.
