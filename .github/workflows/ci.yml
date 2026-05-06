@@ -24,8 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Copy example env
-        run: cp example.env .env
+      - name: Copy example env (rate limiter off — integ runs parallel)
+        run: |
+          cp example.env .env
+          sed -i 's/^RATE_LIMIT_ENABLED=.*/RATE_LIMIT_ENABLED=false/' .env
 
       - name: Build + start stack (output streams to CI log)
         run: docker compose up -d --build --wait
