@@ -2,13 +2,16 @@ use axum::routing::{get, patch, post};
 use axum::Router;
 
 use crate::state::AppState;
-use super::{skins, store, battlepass, users};
+use super::{skins, characters, store, battlepass, users};
 
 pub fn router() -> Router<AppState> {
     Router::new()
         // Skins catalog
         .route("/skins", post(skins::create_skin).get(skins::list_all_skins))
         .route("/skins/{id}", patch(skins::update_skin).delete(skins::delete_skin))
+        // Characters catalog
+        .route("/characters", post(characters::create_character).get(characters::list_all_characters))
+        .route("/characters/{id}", patch(characters::update_character).delete(characters::delete_character))
         // Store catalog
         .route("/store", post(store::create_item).get(store::list_all_items))
         .route("/store/{id}", patch(store::update_item).delete(store::delete_item))

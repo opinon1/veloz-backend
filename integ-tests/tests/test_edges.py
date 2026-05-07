@@ -19,12 +19,13 @@ import pytest
 
 from helpers.api import AuthedClient
 from helpers.factory import (
+    admin_make_character,
+    admin_make_skin,
     make_creds,
+    rand_character_name,
     rand_email,
     rand_item_name,
     rand_password,
-    rand_skin_name,
-    rand_url,
     rand_username,
 )
 
@@ -50,9 +51,7 @@ def test_user_a_cannot_equip_user_b_owned_skin(admin, user_factory):
     """A and B both exist; only B owns skin X. A's POST /skins/X/equip → 403
     (equip checks ownership). And A's PATCH /profile {avatar_url=X} also 403
     (covered in test_bugs but re-asserted here under the AUTHZ lens)."""
-    skin = admin.admin_create_skin(
-        name=rand_skin_name(), outfit_url=rand_url(), cost=0, currency="soft"
-    ).json()
+    skin = admin_make_skin(admin, cost=0, currency="soft")
     a, _ = user_factory()
     b, _ = user_factory()
     b.purchase_skin(skin["id"])
@@ -333,9 +332,7 @@ def test_store_create_with_cost_zero_is_free(admin, user):
 def test_admin_delete_skin_removes_from_user_skins(admin, user):
     """A user's user_skins row goes away when the underlying skin is deleted
     (FK ON DELETE CASCADE). Owned-skins list reflects the change."""
-    skin = admin.admin_create_skin(
-        name=rand_skin_name(), outfit_url=rand_url(), cost=0, currency="soft"
-    ).json()
+    skin = admin_make_skin(admin, cost=0, currency="soft")
     user.purchase_skin(skin["id"])
     assert skin["id"] in [s["id"] for s in user.owned_skins().json()]
 
@@ -349,7 +346,7 @@ def test_admin_delete_season_cascades_tiers_and_progress(admin, user):
     from datetime import datetime, timedelta, timezone
     now = datetime.now(timezone.utc)
     season = admin.admin_create_season(
-        name=rand_skin_name(),
+        name=f"season_{rand_character_name()}",
         starts_at=(now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         ends_at=(now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         premium_cost=10,
@@ -387,12 +384,8 @@ def test_admin_can_delete_own_account(api, admin):
 def test_concurrent_purchases_of_different_items_both_succeed(base_url, admin, user):
     """Two parallel purchases of *different* skins must both succeed and
     both deduct independently. No spurious 409 from cross-item locking."""
-    s1 = admin.admin_create_skin(
-        name=rand_skin_name(), outfit_url=rand_url(), cost=10, currency="soft"
-    ).json()
-    s2 = admin.admin_create_skin(
-        name=rand_skin_name(), outfit_url=rand_url(), cost=15, currency="soft"
-    ).json()
+    s1 = admin_make_skin(admin, cost=10, currency="soft")
+    s2 = admin_make_skin(admin, cost=15, currency="soft")
     admin.admin_grant(user.get_profile().json()["user_id"], "soft", 100)
 
     async def go() -> list[httpx.Response]:
@@ -432,18 +425,18 @@ def test_concurrent_signins_for_same_user_yield_distinct_tokens(api, base_url):
         assert api.raw_get("/auth/verify", t).status_code == 200
 
 
-def test_concurrent_unique_constraint_on_skin_name(admin, base_url):
-    """Two parallel admin_create_skin requests with the same name — exactly
+def test_concurrent_unique_constraint_on_character_name(admin, base_url):
+    """Two parallel admin_create_character requests with the same name — exactly
     one should succeed (201), the other 409."""
-    name = rand_skin_name()
+    name = rand_character_name()
 
     async def go() -> list[httpx.Response]:
         async with httpx.AsyncClient(base_url=base_url, timeout=10) as c:
             h = {"Authorization": f"Bearer {admin.access_token}"}
-            payload = {"name": name, "outfit_url": rand_url(), "cost": 0, "currency": "soft"}
+            payload = {"name": name}
             return await asyncio.gather(
-                c.post("/admin/skins", headers=h, json=payload),
-                c.post("/admin/skins", headers=h, json=payload),
+                c.post("/admin/characters", headers=h, json=payload),
+                c.post("/admin/characters", headers=h, json=payload),
             )
 
     rs = asyncio.run(go())
@@ -454,26 +447,19 @@ def test_concurrent_unique_constraint_on_skin_name(admin, base_url):
 # ───────────────────── [DATA] encoding / length / dupes ─────────────────────
 
 
-def test_unicode_in_skin_name_and_description_round_trips(admin):
+def test_unicode_in_character_name_round_trips(admin):
     """Multibyte chars must round-trip through the DB and back unchanged."""
-    name = f"皮肤_{rand_skin_name()}"
-    desc = "Cosmétique 🎮 Émoji"
-    r = admin.admin_create_skin(
-        name=name, description=desc, outfit_url=rand_url(), cost=0, currency="soft"
-    )
+    name = f"角色_{rand_character_name()}"
+    r = admin.admin_create_character(name=name)
     assert r.status_code == 201
-    body = r.json()
-    assert body["name"] == name
-    assert body["description"] == desc
+    assert r.json()["name"] == name
 
 
-def test_quote_in_skin_name_does_not_break_query(admin):
+def test_quote_in_character_name_does_not_break_query(admin):
     """Single quote in the name must not break the SQL — sqlx parameterizes,
     so this is just regression coverage."""
-    name = f"O'Brien_{rand_skin_name()}"
-    r = admin.admin_create_skin(
-        name=name, outfit_url=rand_url(), cost=0, currency="soft"
-    )
+    name = f"O'Brien_{rand_character_name()}"
+    r = admin.admin_create_character(name=name)
     assert r.status_code == 201
     assert r.json()["name"] == name
 
@@ -505,12 +491,12 @@ def test_two_seasons_can_have_same_tier_number(admin):
     from datetime import datetime, timedelta, timezone
     now = datetime.now(timezone.utc)
     s1 = admin.admin_create_season(
-        name=rand_skin_name(),
+        name=f"season_{rand_character_name()}",
         starts_at=(now + timedelta(days=600)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         ends_at=(now + timedelta(days=630)).strftime("%Y-%m-%dT%H:%M:%SZ"),
     ).json()
     s2 = admin.admin_create_season(
-        name=rand_skin_name(),
+        name=f"season_{rand_character_name()}",
         starts_at=(now + timedelta(days=700)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         ends_at=(now + timedelta(days=730)).strftime("%Y-%m-%dT%H:%M:%SZ"),
     ).json()
@@ -529,7 +515,7 @@ def test_free_and_premium_tracks_of_same_tier_are_independent(admin, user):
     from datetime import datetime, timedelta, timezone
     now = datetime.now(timezone.utc)
     season = admin.admin_create_season(
-        name=rand_skin_name(),
+        name=f"season_{rand_character_name()}",
         starts_at=(now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         ends_at=(now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         premium_cost=50,
@@ -555,9 +541,7 @@ def test_owned_skins_list_isolates_per_user(admin, user_factory):
     """A's owned-skins list never contains B's purchases."""
     a, _ = user_factory()
     b, _ = user_factory()
-    skin = admin.admin_create_skin(
-        name=rand_skin_name(), outfit_url=rand_url(), cost=0, currency="soft"
-    ).json()
+    skin = admin_make_skin(admin, cost=0, currency="soft")
     a.purchase_skin(skin["id"])
 
     assert skin["id"] in [s["id"] for s in a.owned_skins().json()]
@@ -573,7 +557,7 @@ def test_admin_create_tier_rejects_empty_grant_array(admin):
     from datetime import datetime, timedelta, timezone
     now = datetime.now(timezone.utc)
     s = admin.admin_create_season(
-        name=rand_skin_name(),
+        name=f"season_{rand_character_name()}",
         starts_at=(now + timedelta(days=800)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         ends_at=(now + timedelta(days=830)).strftime("%Y-%m-%dT%H:%M:%SZ"),
     ).json()
@@ -590,7 +574,7 @@ def test_admin_create_tier_rejects_non_array_reward(admin):
     from datetime import datetime, timedelta, timezone
     now = datetime.now(timezone.utc)
     s = admin.admin_create_season(
-        name=rand_skin_name(),
+        name=f"season_{rand_character_name()}",
         starts_at=(now + timedelta(days=900)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         ends_at=(now + timedelta(days=930)).strftime("%Y-%m-%dT%H:%M:%SZ"),
     ).json()
@@ -607,7 +591,7 @@ def test_admin_update_tier_with_invalid_reward_rejected(admin):
     from datetime import datetime, timedelta, timezone
     now = datetime.now(timezone.utc)
     s = admin.admin_create_season(
-        name=rand_skin_name(),
+        name=f"season_{rand_character_name()}",
         starts_at=(now + timedelta(days=1000)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         ends_at=(now + timedelta(days=1030)).strftime("%Y-%m-%dT%H:%M:%SZ"),
     ).json()
@@ -714,9 +698,7 @@ def test_purchase_inactive_skin_still_owned_returns_409_then_410_after_repurchas
 ):
     """User owns skin → admin marks inactive. User tries to re-buy → 410
     (item is gone for new buyers). Existing ownership is unaffected."""
-    skin = admin.admin_create_skin(
-        name=rand_skin_name(), outfit_url=rand_url(), cost=0, currency="soft"
-    ).json()
+    skin = admin_make_skin(admin, cost=0, currency="soft")
     user.purchase_skin(skin["id"])
     admin.admin_update_skin(skin["id"], is_active=False)
     assert user.purchase_skin(skin["id"]).status_code == 410
@@ -727,9 +709,7 @@ def test_purchase_inactive_skin_still_owned_returns_409_then_410_after_repurchas
 def test_purchase_inactive_skin_after_delete_returns_404(admin, user):
     """After hard delete, skin is gone → 404 on purchase, ownership wiped via
     cascade."""
-    skin = admin.admin_create_skin(
-        name=rand_skin_name(), outfit_url=rand_url(), cost=0, currency="soft"
-    ).json()
+    skin = admin_make_skin(admin, cost=0, currency="soft")
     user.purchase_skin(skin["id"])
     admin.admin_delete_skin(skin["id"])
     assert user.purchase_skin(skin["id"]).status_code == 404

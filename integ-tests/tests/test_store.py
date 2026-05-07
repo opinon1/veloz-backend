@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from helpers.factory import rand_item_name, rand_skin_name, rand_url
+from helpers.factory import admin_make_skin, rand_item_name
 
 
 @pytest.fixture
@@ -24,9 +24,7 @@ def soft_bundle(admin):
 @pytest.fixture
 def skin_item(admin):
     """Store item that grants ownership of a specific skin when purchased."""
-    skin = admin.admin_create_skin(
-        name=rand_skin_name(), outfit_url=rand_url(), cost=0, currency="soft"
-    ).json()
+    skin = admin_make_skin(admin, cost=0, currency="soft")
     r = admin.admin_create_store_item(
         name=rand_item_name("SkinPack"),
         item_type="skin",
@@ -40,9 +38,7 @@ def skin_item(admin):
 @pytest.fixture
 def multi_grant_bundle(admin):
     """A "starter pack" bundle: a skin + 100 soft + 5 energy in a single item."""
-    skin = admin.admin_create_skin(
-        name=rand_skin_name(), outfit_url=rand_url(), cost=0, currency="soft"
-    ).json()
+    skin = admin_make_skin(admin, cost=0, currency="soft")
     r = admin.admin_create_store_item(
         name=rand_item_name("Starter"),
         item_type="custom",

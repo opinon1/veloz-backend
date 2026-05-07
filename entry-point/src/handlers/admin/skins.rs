@@ -6,10 +6,7 @@ use crate::extractors::AdminClaims;
 
 #[derive(Deserialize)]
 pub struct CreateSkinRequest {
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    pub outfit_url: String,
+    pub character_id: Uuid,
     #[serde(default)]
     pub cost: i64,
     #[serde(default = "default_currency")]
@@ -24,9 +21,7 @@ fn default_currency() -> String { "soft".into() }
 #[derive(Serialize, sqlx::FromRow)]
 pub struct SkinRow {
     pub id: Uuid,
-    pub name: String,
-    pub description: String,
-    pub outfit_url: String,
+    pub character_id: Uuid,
     pub cost: i64,
     pub currency: String,
     pub is_default: bool,
@@ -48,14 +43,12 @@ pub async fn create_skin(
 
     let row = sqlx::query_as::<_, SkinRow>(
         r#"
-        INSERT INTO skins (name, description, outfit_url, cost, currency, is_default, metadata)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id, name, description, outfit_url, cost, currency, is_default, is_active, metadata
+        INSERT INTO skins (character_id, cost, currency, is_default, metadata)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, character_id, cost, currency, is_default, is_active, metadata
         "#,
     )
-    .bind(&payload.name)
-    .bind(&payload.description)
-    .bind(&payload.outfit_url)
+    .bind(payload.character_id)
     .bind(payload.cost)
     .bind(&payload.currency)
     .bind(payload.is_default)
@@ -63,7 +56,8 @@ pub async fn create_skin(
     .fetch_one(&state.db)
     .await
     .map_err(|e| match e {
-        sqlx::Error::Database(db) if db.code().as_deref() == Some("23505") => StatusCode::CONFLICT,
+        // FK violation on character_id → 400 (caller passed an unknown char).
+        sqlx::Error::Database(db) if db.code().as_deref() == Some("23503") => StatusCode::BAD_REQUEST,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     })?;
 
@@ -75,7 +69,7 @@ pub async fn list_all_skins(
     AdminClaims(_): AdminClaims,
 ) -> Result<Json<Vec<SkinRow>>, StatusCode> {
     let rows = sqlx::query_as::<_, SkinRow>(
-        "SELECT id, name, description, outfit_url, cost, currency, is_default, is_active, metadata FROM skins ORDER BY created_at DESC",
+        "SELECT id, character_id, cost, currency, is_default, is_active, metadata FROM skins ORDER BY created_at DESC",
     )
     .fetch_all(&state.db)
     .await
@@ -86,9 +80,7 @@ pub async fn list_all_skins(
 
 #[derive(Deserialize)]
 pub struct UpdateSkinRequest {
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub outfit_url: Option<String>,
+    pub character_id: Option<Uuid>,
     pub cost: Option<i64>,
     pub currency: Option<String>,
     pub is_default: Option<bool>,
@@ -102,26 +94,33 @@ pub async fn update_skin(
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateSkinRequest>,
 ) -> Result<Json<SkinRow>, StatusCode> {
+    if let Some(c) = payload.cost {
+        if c < 0 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+    if let Some(ref cur) = payload.currency {
+        if !matches!(cur.as_str(), "high" | "soft" | "energy") {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
     let row = sqlx::query_as::<_, SkinRow>(
         r#"
         UPDATE skins SET
-            name         = COALESCE($2, name),
-            description  = COALESCE($3, description),
-            outfit_url   = COALESCE($4, outfit_url),
-            cost         = COALESCE($5, cost),
-            currency     = COALESCE($6, currency),
-            is_default   = COALESCE($7, is_default),
-            is_active    = COALESCE($8, is_active),
-            metadata     = COALESCE($9, metadata),
+            character_id = COALESCE($2, character_id),
+            cost         = COALESCE($3, cost),
+            currency     = COALESCE($4, currency),
+            is_default   = COALESCE($5, is_default),
+            is_active    = COALESCE($6, is_active),
+            metadata     = COALESCE($7, metadata),
             updated_at   = CURRENT_TIMESTAMP
         WHERE id = $1
-        RETURNING id, name, description, outfit_url, cost, currency, is_default, is_active, metadata
+        RETURNING id, character_id, cost, currency, is_default, is_active, metadata
         "#,
     )
     .bind(id)
-    .bind(&payload.name)
-    .bind(&payload.description)
-    .bind(&payload.outfit_url)
+    .bind(payload.character_id)
     .bind(payload.cost)
     .bind(&payload.currency)
     .bind(payload.is_default)
@@ -129,7 +128,10 @@ pub async fn update_skin(
     .bind(&payload.metadata)
     .fetch_optional(&state.db)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map_err(|e| match e {
+        sqlx::Error::Database(db) if db.code().as_deref() == Some("23503") => StatusCode::BAD_REQUEST,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    })?
     .ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(Json(row))

@@ -20,10 +20,9 @@ import httpx
 
 from helpers.api import AuthedClient
 from helpers.factory import (
+    admin_make_skin,
     make_creds,
     rand_item_name,
-    rand_skin_name,
-    rand_url,
 )
 
 
@@ -35,9 +34,7 @@ def test_skin_purchase_is_race_safe(base_url, admin, user):
     exactly one successful purchase + one 409. Fix: INSERT ... ON CONFLICT
     DO NOTHING is now the first write; `rows_affected == 0` short-circuits
     with 409 BEFORE the wallet deduction, so the racer never charges."""
-    skin = admin.admin_create_skin(
-        name=rand_skin_name(), outfit_url=rand_url(), cost=100, currency="soft"
-    ).json()
+    skin = admin_make_skin(admin, cost=100, currency="soft")
     user_id = user.get_profile().json()["user_id"]
     admin.admin_grant(user_id, "soft", 500)
 
@@ -101,9 +98,7 @@ def test_free_skin_purchase_returns_actual_balance(admin, user):
     handler now SELECTs the relevant wallet column and returns the real
     current balance."""
     admin.admin_grant(user.get_profile().json()["user_id"], "soft", 500)
-    free = admin.admin_create_skin(
-        name=rand_skin_name(), outfit_url=rand_url(), cost=0, currency="soft"
-    ).json()
+    free = admin_make_skin(admin, cost=0, currency="soft")
     r = user.purchase_skin(free["id"])
     assert r.status_code == 200
     assert r.json()["new_balance"] == 500
@@ -329,9 +324,7 @@ def test_profile_patch_cannot_equip_unowned_skin(user_factory, admin):
     a, _ = user_factory()
     b, _ = user_factory()
 
-    skin = admin.admin_create_skin(
-        name=rand_skin_name(), outfit_url=rand_url(), cost=0, currency="soft"
-    ).json()
+    skin = admin_make_skin(admin, cost=0, currency="soft")
     a.purchase_skin(skin["id"])  # A owns it; B doesn't.
 
     r = b.update_profile(avatar_url=skin["id"])
@@ -351,11 +344,10 @@ def test_admin_delete_skin_clears_dangling_avatar_url(admin, user):
     """When an admin deletes a skin, every profile that had it equipped
     should be cleared. Otherwise profile.avatar_url points at a UUID with
     no matching row in skins."""
-    skin = admin.admin_create_skin(
-        name=rand_skin_name(), outfit_url=rand_url(), cost=0, currency="soft"
-    ).json()
+    skin = admin_make_skin(admin, cost=0, currency="soft")
     user.purchase_skin(skin["id"])
     user.equip_skin(skin["id"])
+    user.update_profile(avatar_url=skin["id"])
     assert user.get_profile().json()["avatar_url"] == skin["id"]
 
     assert admin.admin_delete_skin(skin["id"]).status_code == 204
@@ -406,9 +398,10 @@ def test_store_purchase_with_zero_multiplier_is_free_and_returns_real_balance(ad
 def test_admin_create_skin_rejects_invalid_currency(admin):
     """Currency must be one of high/soft/energy. Bogus codes used to get
     inserted as-is and only fail later at purchase time."""
+    from helpers.factory import admin_make_character
+    char = admin_make_character(admin)
     r = admin.admin_create_skin(
-        name=rand_skin_name(),
-        outfit_url=rand_url(),
+        character_id=char["id"],
         cost=10,
         currency="btc",
     )
@@ -416,9 +409,10 @@ def test_admin_create_skin_rejects_invalid_currency(admin):
 
 
 def test_admin_create_skin_rejects_negative_cost(admin):
+    from helpers.factory import admin_make_character
+    char = admin_make_character(admin)
     r = admin.admin_create_skin(
-        name=rand_skin_name(),
-        outfit_url=rand_url(),
+        character_id=char["id"],
         cost=-5,
         currency="soft",
     )
@@ -526,9 +520,7 @@ def test_delete_account_cascades_runs_wallet_profile_skins(api, admin, creds):
 
     # Build state: highscore + currency + skin ownership.
     me.submit_run(score=999, distance=0, coins_collected=10, duration_ms=1)
-    skin = admin.admin_create_skin(
-        name=rand_skin_name(), outfit_url=rand_url(), cost=0, currency="soft"
-    ).json()
+    skin = admin_make_skin(admin, cost=0, currency="soft")
     me.purchase_skin(skin["id"])
     assert me.get_profile().json()["main_highscore"] == 999
     assert skin["id"] in [s["id"] for s in me.owned_skins().json()]

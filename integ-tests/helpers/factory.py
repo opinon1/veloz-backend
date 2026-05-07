@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import secrets
 import string
-import uuid
 from dataclasses import dataclass
 
 
@@ -39,12 +38,27 @@ def make_creds(prefix: str = "user") -> UserCreds:
     return UserCreds(rand_username(prefix), rand_email(prefix), rand_password())
 
 
-def rand_skin_name() -> str:
-    return f"Skin_{rand_suffix(8)}"
+def rand_character_name() -> str:
+    return f"Char_{rand_suffix(8)}"
 
 
-def rand_url(path: str = "outfit") -> str:
-    return f"https://cdn.example.com/{path}/{uuid.uuid4()}.glb"
+def admin_make_character(admin, **opts):
+    """Create a character via the admin API, asserting success. Returns the row."""
+    payload = {"name": rand_character_name(), **opts}
+    r = admin.admin_create_character(**payload)
+    assert r.status_code == 201, f"create_character failed: {r.status_code} {r.text}"
+    return r.json()
+
+
+def admin_make_skin(admin, character_id: str | None = None, **opts):
+    """Create a skin via the admin API. Auto-creates a character if `character_id`
+    is omitted so callers that don't care about the character can stay terse."""
+    if character_id is None:
+        character_id = admin_make_character(admin)["id"]
+    payload = {"character_id": character_id, **opts}
+    r = admin.admin_create_skin(**payload)
+    assert r.status_code == 201, f"create_skin failed: {r.status_code} {r.text}"
+    return r.json()
 
 
 def rand_item_name(prefix: str = "Item") -> str:

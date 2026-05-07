@@ -6,9 +6,7 @@ use crate::state::AppState;
 #[derive(Serialize, sqlx::FromRow)]
 pub struct SkinRow {
     pub id: Uuid,
-    pub name: String,
-    pub description: String,
-    pub outfit_url: String,
+    pub character_id: Uuid,
     pub cost: i64,
     pub currency: String,
     pub is_default: bool,
@@ -20,10 +18,10 @@ pub async fn list_skins(
 ) -> Result<Json<Vec<SkinRow>>, StatusCode> {
     let rows = sqlx::query_as::<_, SkinRow>(
         r#"
-        SELECT id, name, description, outfit_url, cost, currency, is_default, metadata
+        SELECT id, character_id, cost, currency, is_default, metadata
         FROM skins
         WHERE is_active = TRUE
-        ORDER BY cost ASC, name ASC
+        ORDER BY cost ASC
         "#,
     )
     .fetch_all(&state.db)

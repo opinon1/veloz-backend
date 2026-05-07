@@ -8,9 +8,7 @@ use crate::extractors::Claims;
 #[derive(Serialize, sqlx::FromRow)]
 pub struct OwnedSkinRow {
     pub id: Uuid,
-    pub name: String,
-    pub description: String,
-    pub outfit_url: String,
+    pub character_id: Uuid,
     pub acquired_at: DateTime<Utc>,
 }
 
@@ -20,7 +18,7 @@ pub async fn owned_skins(
 ) -> Result<Json<Vec<OwnedSkinRow>>, StatusCode> {
     let rows = sqlx::query_as::<_, OwnedSkinRow>(
         r#"
-        SELECT s.id, s.name, s.description, s.outfit_url, us.acquired_at
+        SELECT s.id, s.character_id, us.acquired_at
         FROM user_skins us
         JOIN skins s ON s.id = us.skin_id
         WHERE us.user_id = $1

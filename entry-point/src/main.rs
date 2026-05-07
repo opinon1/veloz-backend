@@ -74,6 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/profile", handlers::profile::router::router())
         .nest("/wallet", handlers::wallet::router::router())
         .nest("/skins", handlers::skins::router::router())
+        .nest("/characters", handlers::characters::router::router())
         .nest("/battlepass", handlers::battlepass::router::router())
         .nest("/store", handlers::store::router::router())
         .nest("/runs", handlers::runs::router::router())

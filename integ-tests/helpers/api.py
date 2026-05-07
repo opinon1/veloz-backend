@@ -106,6 +106,10 @@ class AuthedClient:
     def equip_skin(self, skin_id: str) -> httpx.Response:
         return self._c.raw_post(f"/skins/{skin_id}/equip", self.access_token)
 
+    # ── Characters ──
+    def list_characters(self) -> httpx.Response:
+        return self._c.raw_get("/characters", self.access_token)
+
     # ── Battlepass ──
     def bp_current(self) -> httpx.Response:
         return self._c.raw_get("/battlepass/current")
@@ -161,6 +165,22 @@ class AuthedClient:
 
     def admin_list_skins(self) -> httpx.Response:
         return self._c.raw_get("/admin/skins", self.access_token)
+
+    def admin_create_character(self, **fields: Any) -> httpx.Response:
+        return self._c.raw_post("/admin/characters", self.access_token, json=fields)
+
+    def admin_update_character(self, character_id: str, **fields: Any) -> httpx.Response:
+        return self._c.raw_patch(
+            f"/admin/characters/{character_id}", self.access_token, json=fields
+        )
+
+    def admin_delete_character(self, character_id: str) -> httpx.Response:
+        return self._c.raw_delete(
+            f"/admin/characters/{character_id}", self.access_token
+        )
+
+    def admin_list_characters(self) -> httpx.Response:
+        return self._c.raw_get("/admin/characters", self.access_token)
 
     def admin_create_store_item(self, **fields: Any) -> httpx.Response:
         return self._c.raw_post("/admin/store", self.access_token, json=fields)
