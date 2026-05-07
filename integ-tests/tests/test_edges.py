@@ -49,15 +49,13 @@ def test_user_a_token_cannot_read_user_b_profile_via_admin(user_factory):
 
 def test_user_a_cannot_equip_user_b_owned_skin(admin, user_factory):
     """A and B both exist; only B owns skin X. A's POST /skins/X/equip → 403
-    (equip checks ownership). And A's PATCH /profile {avatar_url=X} also 403
-    (covered in test_bugs but re-asserted here under the AUTHZ lens)."""
+    (equip checks ownership). B's equip succeeds."""
     skin = admin_make_skin(admin, cost=0, currency="soft")
     a, _ = user_factory()
     b, _ = user_factory()
     b.purchase_skin(skin["id"])
 
     assert a.equip_skin(skin["id"]).status_code == 403
-    assert a.update_profile(avatar_url=skin["id"]).status_code == 403
     # B is unaffected.
     assert b.equip_skin(skin["id"]).status_code == 200
 

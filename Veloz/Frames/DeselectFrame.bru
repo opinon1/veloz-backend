@@ -1,0 +1,15 @@
+meta {
+  name: Deselect Frame
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{base_url}}/frames/deselect
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}

@@ -317,44 +317,6 @@ def test_change_password_kills_current_token(user, creds):
 # ─────────────────── Round 2 audit (deeper edge cases) ───────────────────
 
 
-def test_profile_patch_cannot_equip_unowned_skin(user_factory, admin):
-    """PATCH /profile with a UUID-shaped avatar_url must validate ownership.
-    Without this gate a user could bypass the check on POST /skins/{id}/equip
-    just by writing the skin_id directly into their profile."""
-    a, _ = user_factory()
-    b, _ = user_factory()
-
-    skin = admin_make_skin(admin, cost=0, currency="soft")
-    a.purchase_skin(skin["id"])  # A owns it; B doesn't.
-
-    r = b.update_profile(avatar_url=skin["id"])
-    assert r.status_code == 403
-    assert b.get_profile().json()["avatar_url"] in (None, "")
-
-
-def test_profile_patch_allows_non_uuid_avatar_strings(user):
-    """Non-UUID avatar_url values still pass through (no ownership check
-    applies — only the UUID branch is gated). Preserves legacy URLs."""
-    r = user.update_profile(avatar_url="https://cdn.example.com/legacy.png")
-    assert r.status_code == 200
-    assert r.json()["avatar_url"] == "https://cdn.example.com/legacy.png"
-
-
-def test_admin_delete_skin_clears_dangling_avatar_url(admin, user):
-    """When an admin deletes a skin, every profile that had it equipped
-    should be cleared. Otherwise profile.avatar_url points at a UUID with
-    no matching row in skins."""
-    skin = admin_make_skin(admin, cost=0, currency="soft")
-    user.purchase_skin(skin["id"])
-    user.equip_skin(skin["id"])
-    user.update_profile(avatar_url=skin["id"])
-    assert user.get_profile().json()["avatar_url"] == skin["id"]
-
-    assert admin.admin_delete_skin(skin["id"]).status_code == 204
-    after = user.get_profile().json()
-    assert after["avatar_url"] in (None, "")
-
-
 def test_admin_grant_for_nonexistent_user_returns_404(admin):
     """adjust_balance now distinguishes RowNotFound (no wallet for user) from
     other DB errors and returns 404 instead of 500."""

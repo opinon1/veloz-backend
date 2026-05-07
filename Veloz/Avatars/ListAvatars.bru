@@ -1,0 +1,21 @@
+meta {
+  name: List Avatars (Owned)
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{base_url}}/avatars
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+script:post-response {
+  if (res.status === 200 && Array.isArray(res.body) && res.body.length > 0) {
+    bru.setEnvVar("avatar_id", res.body[0].id);
+  }
+}

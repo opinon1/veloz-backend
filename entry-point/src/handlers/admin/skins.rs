@@ -142,28 +142,17 @@ pub async fn delete_skin(
     AdminClaims(_): AdminClaims,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, StatusCode> {
-    // Clear references from profiles.avatar_url before deleting; there is no
-    // FK on avatar_url (it's free-form text), so without this step users who
-    // had the skin equipped would keep a dangling UUID in their profile.
-    let mut tx = state.db.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    sqlx::query("UPDATE profiles SET avatar_url = NULL WHERE avatar_url = $1")
-        .bind(id.to_string())
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+    // user_skins cascades on FK; user_characters.equipped_skin_id has
+    // ON DELETE SET NULL. Nothing extra to clean up.
     let result = sqlx::query("DELETE FROM skins WHERE id = $1")
         .bind(id)
-        .execute(&mut *tx)
+        .execute(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if result.rows_affected() == 0 {
         return Err(StatusCode::NOT_FOUND);
     }
-
-    tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(StatusCode::NO_CONTENT)
 }

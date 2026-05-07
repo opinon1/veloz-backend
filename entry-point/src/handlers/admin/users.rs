@@ -157,8 +157,8 @@ pub struct UpdateProfileRequest {
     pub total_xp: Option<i64>,
     pub price_multiplier: Option<f64>,
     pub main_highscore: Option<i64>,
-    pub avatar_url: Option<String>,
-    pub frame_url: Option<String>,
+    pub avatar_url: Option<Uuid>,
+    pub frame_url: Option<Uuid>,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -168,8 +168,8 @@ pub struct ProfileRow {
     pub total_xp: i64,
     pub price_multiplier: f64,
     pub main_highscore: i64,
-    pub avatar_url: Option<String>,
-    pub frame_url: Option<String>,
+    pub avatar_url: Option<Uuid>,
+    pub frame_url: Option<Uuid>,
 }
 
 pub async fn update_profile(
@@ -222,8 +222,8 @@ pub async fn update_profile(
     .bind(payload.total_xp)
     .bind(payload.price_multiplier)
     .bind(payload.main_highscore)
-    .bind(&payload.avatar_url)
-    .bind(&payload.frame_url)
+    .bind(payload.avatar_url)
+    .bind(payload.frame_url)
     .fetch_optional(&state.db)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?

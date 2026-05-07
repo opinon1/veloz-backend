@@ -1,0 +1,22 @@
+meta {
+  name: Update Frame
+  type: http
+  seq: 3
+}
+
+patch {
+  url: {{base_url}}/admin/frames/{{frame_id}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "price": 750,
+    "is_active": true
+  }
+}

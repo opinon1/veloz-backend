@@ -50,6 +50,28 @@ def admin_make_character(admin, **opts):
     return r.json()
 
 
+def rand_avatar_name() -> str:
+    return f"Avatar_{rand_suffix(8)}"
+
+
+def rand_frame_name() -> str:
+    return f"Frame_{rand_suffix(8)}"
+
+
+def admin_make_avatar(admin, **opts):
+    payload = {"name": rand_avatar_name(), "price": 0, "currency": "soft", **opts}
+    r = admin.admin_create_avatar(**payload)
+    assert r.status_code == 201, f"create_avatar failed: {r.status_code} {r.text}"
+    return r.json()
+
+
+def admin_make_frame(admin, **opts):
+    payload = {"name": rand_frame_name(), "price": 0, "currency": "soft", **opts}
+    r = admin.admin_create_frame(**payload)
+    assert r.status_code == 201, f"create_frame failed: {r.status_code} {r.text}"
+    return r.json()
+
+
 def admin_make_skin(admin, character_id: str | None = None, **opts):
     """Create a skin via the admin API. Auto-creates a character if `character_id`
     is omitted so callers that don't care about the character can stay terse."""

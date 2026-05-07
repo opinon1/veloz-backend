@@ -1,4 +1,9 @@
-"""Profile flows: read defaults, partial updates (avatar_url / frame_url)."""
+"""Profile flows: read defaults + auth.
+
+Avatar/frame selection now lives behind dedicated `/avatars/{id}/select` and
+`/frames/{id}/select` endpoints (see test_avatars.py / test_frames.py). PATCH
+/profile is a no-op echo today.
+"""
 from __future__ import annotations
 
 
@@ -13,39 +18,18 @@ def test_profile_defaults_on_signup(user):
     assert body["total_xp"] == 0
     assert body["price_multiplier"] == 1.0
     assert body["main_highscore"] == 0
-    assert body["avatar_url"] in (None, "")
-    assert body["frame_url"] in (None, "")
+    assert body["avatar_url"] is None
+    assert body["frame_url"] is None
 
 
-def test_profile_update_avatar_only(user):
-    """PATCH with only avatar_url leaves frame_url untouched."""
-    resp = user.update_profile(avatar_url="avatar-abc")
-    assert resp.status_code == 200
-    assert resp.json()["avatar_url"] == "avatar-abc"
-    assert resp.json()["frame_url"] in (None, "")
-
-    profile = user.get_profile().json()
-    assert profile["avatar_url"] == "avatar-abc"
-
-
-def test_profile_update_frame_only(user):
-    """PATCH with only frame_url leaves avatar_url untouched."""
-    user.update_profile(avatar_url="keep-me")
-    r = user.update_profile(frame_url="https://cdn.example.com/frames/gold.png")
+def test_profile_patch_echoes_current_selections(user):
+    """PATCH /profile with empty body returns the current selections."""
+    r = user.update_profile()
     assert r.status_code == 200
-    body = r.json()
-    assert body["avatar_url"] == "keep-me"
-    assert body["frame_url"] == "https://cdn.example.com/frames/gold.png"
-
-
-def test_profile_update_both(user):
-    """PATCH with both fields writes both."""
-    r = user.update_profile(avatar_url="a", frame_url="f")
-    assert r.status_code == 200
-    assert r.json() == {"avatar_url": "a", "frame_url": "f"}
+    assert r.json() == {"avatar_url": None, "frame_url": None}
 
 
 def test_profile_requires_auth(api):
     """Unauthenticated request → 401."""
     assert api.raw_get("/profile").status_code == 401
-    assert api.raw_patch("/profile", json={"avatar_url": "x"}).status_code == 401
+    assert api.raw_patch("/profile", json={}).status_code == 401

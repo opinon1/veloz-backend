@@ -13,8 +13,8 @@ pub struct ProfileResponse {
     pub total_xp: i64,
     pub price_multiplier: f64,
     pub main_highscore: i64,
-    pub avatar_url: Option<String>,
-    pub frame_url: Option<String>,
+    pub avatar_url: Option<Uuid>,
+    pub frame_url: Option<Uuid>,
 }
 
 pub async fn get_profile(

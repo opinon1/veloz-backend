@@ -1,0 +1,15 @@
+meta {
+  name: Select Avatar
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{base_url}}/avatars/{{avatar_id}}/select
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}

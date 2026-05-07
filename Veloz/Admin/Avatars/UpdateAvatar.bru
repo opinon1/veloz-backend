@@ -1,0 +1,22 @@
+meta {
+  name: Update Avatar
+  type: http
+  seq: 3
+}
+
+patch {
+  url: {{base_url}}/admin/avatars/{{avatar_id}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "price": 300,
+    "is_active": true
+  }
+}

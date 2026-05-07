@@ -1,0 +1,29 @@
+meta {
+  name: Create Frame
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{base_url}}/admin/frames
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "name": "Gold Frame",
+    "price": 500,
+    "currency": "high"
+  }
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setEnvVar("frame_id", res.body.id);
+  }
+}

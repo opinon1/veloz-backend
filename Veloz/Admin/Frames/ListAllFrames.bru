@@ -1,0 +1,15 @@
+meta {
+  name: List All Frames
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/admin/frames
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}

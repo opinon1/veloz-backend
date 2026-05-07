@@ -1,0 +1,15 @@
+meta {
+  name: Purchase Frame
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{base_url}}/frames/{{frame_id}}/purchase
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}

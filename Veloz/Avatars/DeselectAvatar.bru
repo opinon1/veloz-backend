@@ -1,0 +1,15 @@
+meta {
+  name: Deselect Avatar
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{base_url}}/avatars/deselect
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}

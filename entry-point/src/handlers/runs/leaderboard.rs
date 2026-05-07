@@ -16,8 +16,8 @@ pub struct LeaderboardRow {
     pub username: String,
     pub main_highscore: i64,
     pub account_level: i32,
-    pub avatar_url: Option<String>,
-    pub frame_url: Option<String>,
+    pub avatar_url: Option<Uuid>,
+    pub frame_url: Option<Uuid>,
 }
 
 pub async fn leaderboard(

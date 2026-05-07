@@ -1,0 +1,17 @@
+meta {
+  name: Frames Catalog
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/frames/catalog
+  body: none
+  auth: none
+}
+
+script:post-response {
+  if (res.status === 200 && Array.isArray(res.body) && res.body.length > 0) {
+    bru.setEnvVar("frame_id", res.body[0].id);
+  }
+}

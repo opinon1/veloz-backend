@@ -1,0 +1,29 @@
+meta {
+  name: Create Avatar
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{base_url}}/admin/avatars
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "name": "Galaxy Avatar",
+    "price": 250,
+    "currency": "soft"
+  }
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setEnvVar("avatar_id", res.body.id);
+  }
+}

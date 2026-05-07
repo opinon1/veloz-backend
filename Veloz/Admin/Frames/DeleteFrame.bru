@@ -1,0 +1,15 @@
+meta {
+  name: Delete Frame
+  type: http
+  seq: 4
+}
+
+delete {
+  url: {{base_url}}/admin/frames/{{frame_id}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}

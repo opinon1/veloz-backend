@@ -1,0 +1,17 @@
+meta {
+  name: Avatars Catalog
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/avatars/catalog
+  body: none
+  auth: none
+}
+
+script:post-response {
+  if (res.status === 200 && Array.isArray(res.body) && res.body.length > 0) {
+    bru.setEnvVar("avatar_id", res.body[0].id);
+  }
+}
