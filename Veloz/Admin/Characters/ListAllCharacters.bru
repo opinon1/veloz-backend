@@ -1,0 +1,15 @@
+meta {
+  name: List All Characters
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/admin/characters
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}

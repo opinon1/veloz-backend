@@ -1,0 +1,22 @@
+meta {
+  name: Update Character
+  type: http
+  seq: 3
+}
+
+patch {
+  url: {{base_url}}/admin/characters/{{character_id}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "default_unlocked": true,
+    "is_active": true
+  }
+}

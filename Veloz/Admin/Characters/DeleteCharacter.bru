@@ -1,0 +1,15 @@
+meta {
+  name: Delete Character
+  type: http
+  seq: 4
+}
+
+delete {
+  url: {{base_url}}/admin/characters/{{character_id}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
