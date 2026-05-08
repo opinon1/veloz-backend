@@ -1,0 +1,48 @@
+meta {
+  name: Charge
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{base_url}}/payments/charge
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "item_id": "{{store_item_id}}",
+    "customer_information": {
+      "firstName": "John",
+      "lastName": "Due",
+      "middleName": "",
+      "email": "john.due@mail.com",
+      "phone1": "5555555555",
+      "city": "Mexico",
+      "address1": "Test 123",
+      "postalCode": "11000",
+      "state": "Mexico",
+      "country": "MX",
+      "ip": "0.0.0.0"
+    },
+    "card_data": {
+      "cardNumber": "4111111111111111",
+      "cvv": "120",
+      "cardholderName": "John Due",
+      "expirationYear": "27",
+      "expirationMonth": "12"
+    },
+    "redirect_url": "https://link.etomin.com/confirmation"
+  }
+}
+
+script:post-response {
+  if (res.status === 200 || res.status === 202 || res.status === 402) {
+    bru.setEnvVar("payment_id", res.body.payment_id);
+  }
+}

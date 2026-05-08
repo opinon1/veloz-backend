@@ -17,4 +17,5 @@ addopts = "-v --tb=short --strict-markers"
 markers = [
     "admin: tests that require an admin user (auto-promoted via psql)",
     "slow: tests that hit rate-limiters or wait on timers",
+    "etomin: tests that hit the live Etomin sandbox (skipped without ETOMIN_EMAIL/PASSWORD)",
 ]

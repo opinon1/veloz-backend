@@ -54,6 +54,9 @@ services:
       REDIS_PORT: ${REDIS_PORT}
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      ETOMIN_BASE_URL: ${ETOMIN_BASE_URL:-https://pagos.etomin.com}
+      ETOMIN_EMAIL: ${ETOMIN_EMAIL:-}
+      ETOMIN_PASSWORD: ${ETOMIN_PASSWORD:-}
     develop:
       watch:
         - action: rebuild

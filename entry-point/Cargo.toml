@@ -30,3 +30,6 @@ bcrypt = "0.18"
 
 # Weighted-random for prize wheel
 rand = "0.8"
+
+# HTTP client for Etomin payments API
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }

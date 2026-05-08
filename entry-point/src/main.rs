@@ -3,6 +3,7 @@ mod middleware;
 mod state;
 mod extractors;
 mod models;
+mod services;
 mod leveling;
 
 use axum::{routing::get, Router};
@@ -63,9 +64,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let redis_manager = redis::aio::ConnectionManager::new(redis_client).await?;
     tracing::info!("Connected to Redis");
 
+    let etomin = match services::etomin::EtominClient::from_env(redis_manager.clone()) {
+        Ok(c) => {
+            tracing::info!("Etomin client configured");
+            Some(c)
+        }
+        Err(e) => {
+            tracing::warn!("Etomin client not configured: {e}");
+            None
+        }
+    };
+
     let state = AppState {
         db: pool,
         redis: redis_manager,
+        etomin,
     };
 
     let app = Router::new()
@@ -81,6 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/store", handlers::store::router::router())
         .nest("/runs", handlers::runs::router::router())
         .nest("/prize-wheel", handlers::prize_wheel::router::router())
+        .nest("/payments", handlers::payments::router::router())
         .nest("/admin", handlers::admin::router::router())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

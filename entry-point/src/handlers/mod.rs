@@ -10,4 +10,5 @@ pub mod battlepass;
 pub mod store;
 pub mod runs;
 pub mod prize_wheel;
+pub mod payments;
 pub mod admin;

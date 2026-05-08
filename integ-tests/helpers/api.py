@@ -132,6 +132,13 @@ class AuthedClient:
     def deselect_avatar(self) -> httpx.Response:
         return self._c.raw_post("/avatars/deselect", self.access_token)
 
+    # ── Payments ──
+    def charge_payment(self, **fields: Any) -> httpx.Response:
+        return self._c.raw_post("/payments/charge", self.access_token, json=fields)
+
+    def get_payment(self, payment_id: str) -> httpx.Response:
+        return self._c.raw_get(f"/payments/{payment_id}", self.access_token)
+
     # ── Prize wheel ──
     def get_prize_wheel(self) -> httpx.Response:
         return self._c.raw_get("/prize-wheel", self.access_token)

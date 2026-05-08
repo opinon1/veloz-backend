@@ -74,6 +74,15 @@ export class VelozStack extends cdk.Stack {
       },
     });
 
+    // Etomin credentials. Imported by name so an operator can populate the
+    // secret out-of-band (CDK won't overwrite it on subsequent deploys).
+    // Schema: { email: string, password: string }.
+    const etominSecret = secrets.Secret.fromSecretNameV2(
+      this,
+      "EtominSecret",
+      "veloz/etomin"
+    );
+
     // ──────────────────────────────────────────────────────────
     // Security groups.
     // ──────────────────────────────────────────────────────────
@@ -178,6 +187,7 @@ export class VelozStack extends cdk.Stack {
 
     dbSecret.grantRead(taskDef.taskRole);
     redisAuthToken.grantRead(taskDef.taskRole);
+    etominSecret.grantRead(taskDef.taskRole);
 
     const container = taskDef.addContainer("app", {
       image: ecs.ContainerImage.fromEcrRepository(repo, "latest"),
@@ -194,11 +204,14 @@ export class VelozStack extends cdk.Stack {
         REDIS_PORT: redis.attrPrimaryEndPointPort,
         REDIS_TLS: "true",
         RATE_LIMIT_ENABLED: "true",
+        ETOMIN_BASE_URL: "https://pagos.etomin.com",
       },
       secrets: {
         DB_USER: ecs.Secret.fromSecretsManager(dbSecret, "username"),
         DB_PASSWORD: ecs.Secret.fromSecretsManager(dbSecret, "password"),
         REDIS_PASSWORD: ecs.Secret.fromSecretsManager(redisAuthToken),
+        ETOMIN_EMAIL: ecs.Secret.fromSecretsManager(etominSecret, "email"),
+        ETOMIN_PASSWORD: ecs.Secret.fromSecretsManager(etominSecret, "password"),
       },
       healthCheck: {
         command: [
