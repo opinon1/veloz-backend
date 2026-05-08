@@ -81,6 +81,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         etomin,
     };
 
+    // Background payment reconciler. Etomin has no webhooks, so we poll
+    // for status updates on PENDING rows. Catches "user closed the 3DS tab"
+    // by converging to terminal state without any client involvement.
+    if let Some(etomin_client) = state.etomin.clone() {
+        let db = state.db.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            // Skip the immediate first tick.
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                handlers::payments::reconcile::sweep(&db, &etomin_client, 50).await;
+            }
+        });
+        tracing::info!("Payment reconciler running (30s interval)");
+    }
+
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
         .nest("/auth", handlers::auth::router::router(&state))

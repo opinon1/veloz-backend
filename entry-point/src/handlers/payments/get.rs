@@ -4,6 +4,7 @@ use serde::Serialize;
 use uuid::Uuid;
 use crate::state::AppState;
 use crate::extractors::Claims;
+use super::reconcile::reconcile_payment;
 
 #[derive(Serialize, sqlx::FromRow)]
 pub struct PaymentRow {
@@ -19,11 +20,35 @@ pub struct PaymentRow {
 }
 
 /// GET /payments/{id} — only returns rows owned by the caller.
+///
+/// Side effect: when the row is still PENDING, kicks off a reconcile against
+/// Etomin's status endpoint before returning. This is how we converge to
+/// terminal state when the user closed the 3DS tab and never came back —
+/// any subsequent poll re-queries Etomin and applies grants if APPROVED.
 pub async fn get_payment(
     State(state): State<AppState>,
     Claims(session): Claims,
     Path(id): Path<Uuid>,
 ) -> Result<Json<PaymentRow>, StatusCode> {
+    // Pre-check: row must exist and be the caller's. Avoids running
+    // reconcile for someone else's payment (and leaking that it exists).
+    let exists: Option<(String,)> =
+        sqlx::query_as("SELECT status FROM payments WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(session.user_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let (status,) = exists.ok_or(StatusCode::NOT_FOUND)?;
+
+    if status == "PENDING" {
+        if let Some(etomin) = state.etomin.as_ref() {
+            // Best-effort. Etomin / network failures don't block the read —
+            // caller still sees the cached PENDING row, sweeper retries.
+            let _ = reconcile_payment(&state.db, etomin, id).await;
+        }
+    }
+
     let row = sqlx::query_as::<_, PaymentRow>(
         r#"SELECT id, item_id, amount, currency, status, redirect_to, etomin_response,
                   created_at, updated_at

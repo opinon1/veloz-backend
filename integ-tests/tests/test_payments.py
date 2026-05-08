@@ -300,3 +300,80 @@ def test_get_payment_404_for_other_user(admin, user_factory):
 
 def test_get_payment_unknown_returns_404(user):
     assert user.get_payment(str(uuid.uuid4())).status_code == 404
+
+
+# ───────────────────── 3DS card matrix (live Etomin) ─────────────────────
+
+
+@pytest.mark.etomin
+@pytest.mark.parametrize(
+    "card_number,brand,flow,expected",
+    [
+        # 4111... is the universal APPROVED card — Etomin sandbox routes it
+        # through 2D regardless of the 3DS list classification.
+        ("4111111111111111", "Visa", "Frictionless", "APPROVED"),
+        # The remaining 3DS cards (Frictionless or Challenge) all return
+        # PENDING + redirectTo from /sale; the only observable difference is
+        # whether visiting redirectTo shows a user challenge. From the
+        # backend's POV both look the same.
+        ("4000000000002511", "Visa", "Frictionless", "PENDING"),
+        ("4000000000002503", "Visa", "Challenge",    "PENDING"),
+        ("376701078252003",  "Amex", "Challenge",    "PENDING"),
+    ],
+)
+def test_3ds_card_outcomes(admin, user_factory, card_number, brand, flow, expected):
+    """Frictionless 3DS = same code path as APPROVED 2D (no challenge needed).
+    Challenge 3DS = backend persists PENDING + redirectTo and returns 202.
+    Headless integ tests can't actually complete the 3DS challenge in a
+    browser, so for Challenge cards we verify the PENDING shape and that
+    no grants leak into the wallet."""
+    if not _etomin_configured():
+        pytest.skip("ETOMIN_EMAIL / ETOMIN_PASSWORD not set")
+
+    item = _make_iap_item(admin, cost=10, grant_amount=500)
+    u, _ = user_factory()
+    pre = u.get_wallet().json()["soft"]
+
+    r = u.charge_payment(
+        item_id=item["id"],
+        customer_information=_customer(),
+        card_data=_card(card_number),
+    )
+    body = r.json()
+    assert body["status"] == expected, f"{brand} {card_number} ({flow}): got {body}"
+
+    if expected == "APPROVED":
+        assert r.status_code == 200
+        assert body["redirect_to"] is None
+        assert u.get_wallet().json()["soft"] == pre + 500
+    else:  # PENDING (challenge)
+        assert r.status_code == 202
+        assert body["redirect_to"] is not None
+        assert body["redirect_to"].startswith("https://")
+        # Wallet untouched until 3DS completes.
+        assert u.get_wallet().json()["soft"] == pre
+        # Polling /payments/{id} keeps it PENDING (no browser to complete).
+        polled = u.get_payment(body["payment_id"]).json()
+        assert polled["status"] == "PENDING"
+        assert polled["redirect_to"] is not None
+
+
+@pytest.mark.etomin
+def test_3ds_pending_lazy_reconcile_idempotent(admin, user_factory):
+    """Polling /payments/{id} repeatedly on a stuck PENDING never flips to
+    APPROVED on its own (no browser completed 3DS) and never accidentally
+    grants the wallet."""
+    if not _etomin_configured():
+        pytest.skip("ETOMIN_EMAIL / ETOMIN_PASSWORD not set")
+    item = _make_iap_item(admin, grant_amount=500)
+    u, _ = user_factory()
+    r = u.charge_payment(
+        item_id=item["id"],
+        customer_information=_customer(),
+        card_data=_card("4000000000002503"),
+    )
+    pid = r.json()["payment_id"]
+    for _ in range(3):
+        polled = u.get_payment(pid).json()
+        assert polled["status"] == "PENDING"
+    assert u.get_wallet().json()["soft"] == 0

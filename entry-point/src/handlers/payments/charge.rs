@@ -123,6 +123,11 @@ pub async fn charge(
         .get("redirectTo")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    // Etomin's internal id — needed later for status reconciliation.
+    let etomin_id = etomin_response
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     let (final_status, http_status) = match etomin_status.as_str() {
         "APPROVED" => ("APPROVED", StatusCode::OK),
@@ -137,13 +142,15 @@ pub async fn charge(
 
     sqlx::query(
         r#"UPDATE payments
-           SET status = $2, redirect_to = $3, etomin_response = $4, updated_at = CURRENT_TIMESTAMP
+           SET status = $2, redirect_to = $3, etomin_response = $4,
+               etomin_id = $5, updated_at = CURRENT_TIMESTAMP
            WHERE id = $1"#,
     )
     .bind(payment_id)
     .bind(final_status)
     .bind(redirect_to.as_deref())
     .bind(&etomin_response)
+    .bind(etomin_id.as_deref())
     .execute(&mut *tx)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

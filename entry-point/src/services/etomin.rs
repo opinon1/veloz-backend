@@ -200,4 +200,52 @@ impl EtominClient {
         }
         Ok(body)
     }
+
+    /// GET /api/v1/transaction/{etomin_id} — authoritative status lookup.
+    /// Etomin has no webhooks, so this is what we poll to reconcile PENDING
+    /// payments after the user clears (or abandons) the 3DS challenge.
+    /// Same auth-retry semantics as `sale`.
+    pub async fn transaction_status(
+        &self,
+        etomin_id: &str,
+    ) -> Result<serde_json::Value, EtominError> {
+        let token = self.token().await?;
+        match self.try_status(&token, etomin_id).await {
+            Ok(v) => Ok(v),
+            Err(EtominError::Auth) => {
+                let mut redis = self.redis.clone();
+                let _: redis::RedisResult<i64> = redis.del(JWT_REDIS_KEY).await;
+                let token = self.refresh_token().await?;
+                self.try_status(&token, etomin_id).await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn try_status(
+        &self,
+        token: &str,
+        etomin_id: &str,
+    ) -> Result<serde_json::Value, EtominError> {
+        let url = format!("{}/api/v1/transaction/{}", self.base_url, etomin_id);
+        let res = self
+            .http
+            .get(&url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| EtominError::Local(e.to_string()))?;
+        let status = res.status();
+        let body: serde_json::Value = res
+            .json()
+            .await
+            .unwrap_or(serde_json::json!({"_unparseable": true}));
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(EtominError::Auth);
+        }
+        if !status.is_success() {
+            return Err(EtominError::Upstream(format!("HTTP {status}: {body}")));
+        }
+        Ok(body)
+    }
 }
