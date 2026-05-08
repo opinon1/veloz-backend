@@ -1,0 +1,15 @@
+meta {
+  name: Spin
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{base_url}}/prize-wheel/spin
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}

@@ -11,8 +11,9 @@ use std::str::FromStr;
 use uuid::Uuid;
 use crate::state::AppState;
 use crate::extractors::Claims;
+use crate::handlers::grants_util::apply_grant;
 use crate::handlers::wallet::utils::adjust_balance;
-use crate::models::store_types::{Grant, StoreCurrency, validate_grants};
+use crate::models::store_types::{StoreCurrency, validate_grants};
 
 #[derive(Serialize)]
 pub struct PurchaseItemResponse {
@@ -108,10 +109,8 @@ pub async fn purchase_item(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Fulfillment: iterate the grants array and apply each in the same tx.
-    // Adding a new Grant variant produces a compile error in `apply_grant`,
-    // forcing the developer to choose how it's fulfilled.
     for g in &grants {
-        apply_grant(&mut tx, session.user_id, g, item_id).await?;
+        apply_grant(&mut tx, session.user_id, g, "store_grant", item_id).await?;
     }
 
     tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -125,36 +124,3 @@ pub async fn purchase_item(
     }))
 }
 
-/// Apply one Grant atomically inside the caller's transaction. Idempotent
-/// where the underlying schema permits (e.g. user_skins ON CONFLICT DO NOTHING).
-async fn apply_grant(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    user_id: Uuid,
-    grant: &Grant,
-    reference_id: Uuid,
-) -> Result<(), StatusCode> {
-    match grant {
-        Grant::Currency { currency, amount } => {
-            adjust_balance(
-                tx,
-                user_id,
-                currency.as_str(),
-                *amount,
-                "store_grant",
-                Some(&reference_id.to_string()),
-            )
-            .await?;
-        }
-        Grant::Skin { skin_id } => {
-            sqlx::query(
-                "INSERT INTO user_skins (user_id, skin_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-            )
-            .bind(user_id)
-            .bind(skin_id)
-            .execute(&mut **tx)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-    }
-    Ok(())
-}

@@ -43,6 +43,12 @@ class VelozClient:
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         return self._http.patch(path, headers=headers, json=json, **kwargs)
 
+    def raw_put(
+        self, path: str, token: str | None = None, json: Any = None, **kwargs: Any
+    ) -> httpx.Response:
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        return self._http.put(path, headers=headers, json=json, **kwargs)
+
     def raw_delete(
         self, path: str, token: str | None = None, json: Any = None, **kwargs: Any
     ) -> httpx.Response:
@@ -125,6 +131,16 @@ class AuthedClient:
 
     def deselect_avatar(self) -> httpx.Response:
         return self._c.raw_post("/avatars/deselect", self.access_token)
+
+    # ── Prize wheel ──
+    def get_prize_wheel(self) -> httpx.Response:
+        return self._c.raw_get("/prize-wheel", self.access_token)
+
+    def spin_prize_wheel(self) -> httpx.Response:
+        return self._c.raw_post("/prize-wheel/spin", self.access_token)
+
+    def prize_wheel_cooldown(self) -> httpx.Response:
+        return self._c.raw_get("/prize-wheel/cooldown", self.access_token)
 
     # ── Frames ──
     def list_frames(self) -> httpx.Response:
@@ -241,6 +257,19 @@ class AuthedClient:
 
     def admin_list_frames(self) -> httpx.Response:
         return self._c.raw_get("/admin/frames", self.access_token)
+
+    def admin_put_prize_wheel(self, items: list) -> httpx.Response:
+        return self._c.raw_put(
+            "/admin/prize-wheel", self.access_token, json={"items": items}
+        )
+
+    def admin_get_prize_wheel(self) -> httpx.Response:
+        return self._c.raw_get("/admin/prize-wheel", self.access_token)
+
+    def admin_clear_prize_wheel_cooldown(self) -> httpx.Response:
+        return self._c.raw_delete(
+            "/admin/prize-wheel/cooldown", self.access_token
+        )
 
     def admin_create_store_item(self, **fields: Any) -> httpx.Response:
         return self._c.raw_post("/admin/store", self.access_token, json=fields)

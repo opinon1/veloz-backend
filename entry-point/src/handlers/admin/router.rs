@@ -1,8 +1,8 @@
-use axum::routing::{get, patch, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 
 use crate::state::AppState;
-use super::{skins, characters, avatars, frames, store, battlepass, users};
+use super::{skins, characters, avatars, frames, store, battlepass, users, prize_wheel};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -18,6 +18,9 @@ pub fn router() -> Router<AppState> {
         // Frames catalog
         .route("/frames", post(frames::create_frame).get(frames::list_all_frames))
         .route("/frames/{id}", patch(frames::update_frame).delete(frames::delete_frame))
+        // Prize wheel
+        .route("/prize-wheel", put(prize_wheel::put_wheel).get(prize_wheel::get_wheel))
+        .route("/prize-wheel/cooldown", delete(prize_wheel::delete_self_cooldown))
         // Store catalog
         .route("/store", post(store::create_item).get(store::list_all_items))
         .route("/store/{id}", patch(store::update_item).delete(store::delete_item))

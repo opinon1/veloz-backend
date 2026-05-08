@@ -2214,6 +2214,7 @@ dependencies = [
  "axum",
  "bcrypt",
  "chrono",
+ "rand",
  "redis",
  "regex",
  "serde",

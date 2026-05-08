@@ -1,0 +1,15 @@
+meta {
+  name: Cooldown
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{base_url}}/prize-wheel/cooldown
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}

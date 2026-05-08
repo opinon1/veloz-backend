@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod profile;
 pub mod wallet;
+pub mod grants_util;
 pub mod skins;
 pub mod characters;
 pub mod avatars;
@@ -8,4 +9,5 @@ pub mod frames;
 pub mod battlepass;
 pub mod store;
 pub mod runs;
+pub mod prize_wheel;
 pub mod admin;

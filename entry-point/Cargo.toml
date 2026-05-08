@@ -27,3 +27,6 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Password Hashing
 bcrypt = "0.18"
+
+# Weighted-random for prize wheel
+rand = "0.8"

@@ -6,3 +6,4 @@ mod frames;
 mod store;
 mod battlepass;
 mod users;
+mod prize_wheel;

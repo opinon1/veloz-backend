@@ -80,6 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/battlepass", handlers::battlepass::router::router())
         .nest("/store", handlers::store::router::router())
         .nest("/runs", handlers::runs::router::router())
+        .nest("/prize-wheel", handlers::prize_wheel::router::router())
         .nest("/admin", handlers::admin::router::router())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
