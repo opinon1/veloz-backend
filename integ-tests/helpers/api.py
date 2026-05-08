@@ -278,6 +278,9 @@ class AuthedClient:
             "/admin/prize-wheel/cooldown", self.access_token
         )
 
+    def admin_delete_prize_wheel(self) -> httpx.Response:
+        return self._c.raw_delete("/admin/prize-wheel", self.access_token)
+
     def admin_create_store_item(self, **fields: Any) -> httpx.Response:
         return self._c.raw_post("/admin/store", self.access_token, json=fields)
 

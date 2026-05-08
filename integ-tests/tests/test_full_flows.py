@@ -10,7 +10,6 @@ which feature's contract was violated.
 """
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest
@@ -34,10 +33,8 @@ from helpers.factory import (
 # ──────────────────────────────────────────────────────────────────────
 
 
-def _etomin_configured() -> bool:
-    return bool(
-        os.environ.get("ETOMIN_EMAIL") and os.environ.get("ETOMIN_PASSWORD")
-    )
+# Etomin sandbox creds are required on the running stack — tests fail
+# loudly if missing rather than silently skipping.
 
 
 def _customer():
@@ -660,9 +657,6 @@ def test_full_iap_payment_credit_spend_flow(admin, user):
         4. Buys a 300-soft skin → wallet=200.
         5. Buys another 300-soft skin → 422 (not enough). Charges again with
            approved card → wallet=700. Buy succeeds → wallet=400."""
-    if not _etomin_configured():
-        pytest.skip("ETOMIN_EMAIL / ETOMIN_PASSWORD not set")
-
     item = admin.admin_create_store_item(
         name=rand_item_name("IAP500"),
         item_type="currency_bundle",

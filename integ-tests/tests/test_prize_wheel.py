@@ -98,18 +98,19 @@ def test_get_wheel_returns_items_and_cooldown(admin, user):
 # ───────────────────── Spin ─────────────────────
 
 
-def test_spin_empty_wheel_returns_503(admin, user):
-    """Wheel with no items can't pick anything → 503. Cooldown NOT set
-    (otherwise the user would be punished for an unconfigured wheel)."""
-    # Ensure wheel is empty by setting then clearing via 0 items would fail
-    # validation; instead PUT a wheel and then admin DELETEs… simpler: just
-    # truncate via an admin trick — we don't expose that, so this test is
-    # conditional on wheel state being empty at session start. To make it
-    # deterministic we set a wheel, spin to use up cooldown, then we can't
-    # easily set back to empty. So just check the 503 path by using a fresh
-    # user and an admin that hasn't set a wheel yet — but the global wheel
-    # is shared. Skip with note.
-    pytest.skip("global wheel is shared across tests; empty-state hard to assert deterministically")
+def test_spin_empty_wheel_returns_503(admin, user_factory):
+    """Wheel with no items → spin returns 503 + cooldown is NOT set
+    (otherwise the user would be punished for an unconfigured wheel).
+
+    Uses DELETE /admin/prize-wheel to reach empty state (PUT requires a
+    non-empty array). Fresh user so the cooldown assertion is clean."""
+    admin.admin_delete_prize_wheel()
+    u, _ = user_factory()
+    r = u.spin_prize_wheel()
+    assert r.status_code == 503
+    # Cooldown NOT set — user can spin again immediately once admin
+    # populates the wheel.
+    assert u.prize_wheel_cooldown().json()["ready"] is True
 
 
 def test_spin_grants_currency_and_records_history(admin, user):

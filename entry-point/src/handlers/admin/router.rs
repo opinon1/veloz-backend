@@ -19,7 +19,7 @@ pub fn router() -> Router<AppState> {
         .route("/frames", post(frames::create_frame).get(frames::list_all_frames))
         .route("/frames/{id}", patch(frames::update_frame).delete(frames::delete_frame))
         // Prize wheel
-        .route("/prize-wheel", put(prize_wheel::put_wheel).get(prize_wheel::get_wheel))
+        .route("/prize-wheel", put(prize_wheel::put_wheel).get(prize_wheel::get_wheel).delete(prize_wheel::delete_wheel))
         .route("/prize-wheel/cooldown", delete(prize_wheel::delete_self_cooldown))
         // Store catalog
         .route("/store", post(store::create_item).get(store::list_all_items))

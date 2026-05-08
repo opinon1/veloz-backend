@@ -8,23 +8,22 @@ Sandbox test cards we exercise (provided by Etomin):
     5111111111111111  → APPROVED   (Mastercard)
     5111111111111112  → DECLINED   (Mastercard)
 
-  3DS Cards (covered separately — TODO when 3DS reconciliation lands):
-    4111111111111111   Frictionless
+  3DS Cards (driven through to APPROVED via the sandbox 3DS simulator):
+    4111111111111111   Frictionless (sandbox routes through 2D)
     4000000000002503   Challenge 3DS
-    4000000000002511   Frictionless
+    4000000000002511   Frictionless 3DS
     376701078252003    Challenge 3DS
 
-Tests marked `pytest.mark.etomin` hit the live Etomin sandbox and are
-skipped when ETOMIN_EMAIL / ETOMIN_PASSWORD aren't set on the running
-stack. Validation tests (auth, item lookup) run regardless.
+ETOMIN_EMAIL + ETOMIN_PASSWORD must be set on the running stack.
+There are no skips — if Etomin isn't configured, tests fail loudly.
 """
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest
 
+from helpers.etomin_browser import complete_3ds_in_sandbox
 from helpers.factory import rand_item_name
 
 
@@ -66,12 +65,6 @@ def _make_iap_item(admin, cost: int = 10, grant_amount: int = 500):
     )
     assert r.status_code == 201, r.text
     return r.json()
-
-
-def _etomin_configured() -> bool:
-    return bool(
-        os.environ.get("ETOMIN_EMAIL") and os.environ.get("ETOMIN_PASSWORD")
-    )
 
 
 # ───────────────────── Validation (no Etomin call) ─────────────────────
@@ -117,18 +110,6 @@ def test_charge_inactive_iap_item_returns_410(admin, user):
     assert r.status_code == 410
 
 
-def test_charge_returns_503_when_etomin_not_configured(admin, user):
-    if _etomin_configured():
-        pytest.skip("Etomin is configured — see test_2ds_card_outcomes")
-    item = _make_iap_item(admin)
-    r = user.charge_payment(
-        item_id=item["id"],
-        customer_information=_customer(),
-        card_data=_card(),
-    )
-    assert r.status_code == 503
-
-
 # ───────────────────── 2DS card matrix (live Etomin) ─────────────────────
 
 
@@ -147,9 +128,6 @@ def test_2ds_card_outcomes(admin, user_factory, card_number, brand, expected):
     HTTP code, persisted status, and grant fulfillment per case.
 
     Uses a fresh user per case so the wallet delta is isolated."""
-    if not _etomin_configured():
-        pytest.skip("ETOMIN_EMAIL / ETOMIN_PASSWORD not set")
-
     item = _make_iap_item(admin, cost=10, grant_amount=500)
     u, _ = user_factory()
     pre = u.get_wallet().json()["soft"]
@@ -166,14 +144,12 @@ def test_2ds_card_outcomes(admin, user_factory, card_number, brand, expected):
         assert r.status_code == 200
         assert body["redirect_to"] is None
         assert u.get_wallet().json()["soft"] == pre + 500
-        # Persisted row matches.
         row = u.get_payment(body["payment_id"]).json()
         assert row["status"] == "APPROVED"
         assert row["amount"] == 10
         assert row["currency"] == "484"
     else:
         assert r.status_code == 402
-        # Wallet untouched on DECLINED.
         assert u.get_wallet().json()["soft"] == pre
         row = u.get_payment(body["payment_id"]).json()
         assert row["status"] == "DECLINED"
@@ -181,10 +157,6 @@ def test_2ds_card_outcomes(admin, user_factory, card_number, brand, expected):
 
 @pytest.mark.etomin
 def test_approved_records_etomin_response(admin, user):
-    """The raw Etomin response must be persisted on the payment row for audit.
-    Drives the case where ops needs to map our payment_id ↔ Etomin orderId."""
-    if not _etomin_configured():
-        pytest.skip("ETOMIN_EMAIL / ETOMIN_PASSWORD not set")
     item = _make_iap_item(admin)
     r = user.charge_payment(
         item_id=item["id"],
@@ -196,14 +168,11 @@ def test_approved_records_etomin_response(admin, user):
     row = user.get_payment(body["payment_id"]).json()
     assert row["etomin_response"]["status"] == "APPROVED"
     assert "orderId" in row["etomin_response"]
-    # Etomin masks the PAN; we should never see the full number anywhere.
     assert "4111111111111111" not in str(row["etomin_response"])
 
 
 @pytest.mark.etomin
 def test_declined_records_etomin_response(admin, user):
-    if not _etomin_configured():
-        pytest.skip("ETOMIN_EMAIL / ETOMIN_PASSWORD not set")
     item = _make_iap_item(admin)
     r = user.charge_payment(
         item_id=item["id"],
@@ -220,10 +189,6 @@ def test_declined_records_etomin_response(admin, user):
 
 @pytest.mark.etomin
 def test_each_charge_uses_unique_reference(admin, user):
-    """Etomin keys idempotency on `reference` (our payment.id). Two charges
-    by the same user for the same item must create distinct payment rows."""
-    if not _etomin_configured():
-        pytest.skip("ETOMIN_EMAIL / ETOMIN_PASSWORD not set")
     item = _make_iap_item(admin)
     a = user.charge_payment(
         item_id=item["id"],
@@ -242,10 +207,6 @@ def test_each_charge_uses_unique_reference(admin, user):
 
 @pytest.mark.etomin
 def test_decline_does_not_apply_grants(admin, user):
-    """Even though the payment row is recorded, no item payload should be
-    granted on DECLINED."""
-    if not _etomin_configured():
-        pytest.skip("ETOMIN_EMAIL / ETOMIN_PASSWORD not set")
     item = _make_iap_item(admin, grant_amount=999)
     pre_soft = user.get_wallet().json()["soft"]
     r = user.charge_payment(
@@ -259,10 +220,6 @@ def test_decline_does_not_apply_grants(admin, user):
 
 @pytest.mark.etomin
 def test_approved_then_inactive_item_blocks_subsequent_charge(admin, user):
-    """Disabling an item between charges takes effect immediately (410 on
-    the second attempt) without affecting the first APPROVED row."""
-    if not _etomin_configured():
-        pytest.skip("ETOMIN_EMAIL / ETOMIN_PASSWORD not set")
     item = _make_iap_item(admin)
     first = user.charge_payment(
         item_id=item["id"],
@@ -280,6 +237,97 @@ def test_approved_then_inactive_item_blocks_subsequent_charge(admin, user):
     assert second.status_code == 410
 
 
+# ───────────────────── 3DS card matrix (live Etomin + simulator) ─────────────────────
+
+
+@pytest.mark.etomin
+@pytest.mark.parametrize(
+    "card_number,brand,flow",
+    [
+        ("4000000000002511", "Visa", "Frictionless"),
+        ("4000000000002503", "Visa", "Challenge"),
+        ("376701078252003",  "Amex", "Challenge"),
+    ],
+)
+def test_3ds_completion_flow(admin, user_factory, card_number, brand, flow):
+    """End-to-end 3DS: charge → PENDING + redirectTo → simulator finishes
+    the 3DS dance against Etomin sandbox → we poll GET /payments/{id} →
+    lazy reconcile pulls APPROVED status from Etomin → grants applied.
+
+    Mirrors what a real frontend would do: redirect the user, wait, then
+    poll until terminal."""
+    item = _make_iap_item(admin, cost=10, grant_amount=500)
+    u, _ = user_factory()
+    pre_soft = u.get_wallet().json()["soft"]
+
+    r = u.charge_payment(
+        item_id=item["id"],
+        customer_information=_customer(),
+        card_data=_card(card_number),
+    )
+    body = r.json()
+    pid = body["payment_id"]
+    assert r.status_code == 202, f"{brand} {flow}: expected 202 got {r.status_code} body={body}"
+    assert body["status"] == "PENDING"
+    assert body["redirect_to"] is not None
+    # Wallet untouched while 3DS is mid-flight.
+    assert u.get_wallet().json()["soft"] == pre_soft
+
+    # Drive Etomin's 3DS through to completion (sandbox accepts empty
+    # deviceInfo and frictionlessly approves the test cards).
+    complete_3ds_in_sandbox(body["redirect_to"])
+
+    # Poll our backend — lazy reconcile should pick up the APPROVED state.
+    polled = u.get_payment(pid).json()
+    assert polled["status"] == "APPROVED", f"{brand} {flow}: still {polled['status']}"
+    assert u.get_wallet().json()["soft"] == pre_soft + 500
+
+
+@pytest.mark.etomin
+def test_3ds_no_completion_stays_pending_then_lazy_reconcile_keeps_pending(
+    admin, user_factory
+):
+    """Without running the 3DS simulator, the row stays PENDING and
+    polling keeps returning PENDING — never falsely credits the wallet."""
+    item = _make_iap_item(admin, grant_amount=500)
+    u, _ = user_factory()
+    r = u.charge_payment(
+        item_id=item["id"],
+        customer_information=_customer(),
+        card_data=_card("4000000000002503"),
+    )
+    pid = r.json()["payment_id"]
+    for _ in range(3):
+        polled = u.get_payment(pid).json()
+        assert polled["status"] == "PENDING"
+    assert u.get_wallet().json()["soft"] == 0
+
+
+@pytest.mark.etomin
+def test_3ds_completion_then_status_query_persists(admin, user_factory):
+    """After 3DS completes and we've reconciled once, the row is
+    APPROVED + frozen. Subsequent polls don't re-process or re-grant."""
+    item = _make_iap_item(admin, grant_amount=500)
+    u, _ = user_factory()
+    r = u.charge_payment(
+        item_id=item["id"],
+        customer_information=_customer(),
+        card_data=_card("4000000000002511"),
+    )
+    pid = r.json()["payment_id"]
+    complete_3ds_in_sandbox(r.json()["redirect_to"])
+
+    first = u.get_payment(pid).json()
+    assert first["status"] == "APPROVED"
+    bal_after_first = u.get_wallet().json()["soft"]
+
+    # Two more polls — must not re-grant.
+    for _ in range(2):
+        again = u.get_payment(pid).json()
+        assert again["status"] == "APPROVED"
+    assert u.get_wallet().json()["soft"] == bal_after_first
+
+
 # ───────────────────── Get payment status ─────────────────────
 
 
@@ -293,87 +341,9 @@ def test_get_payment_404_for_other_user(admin, user_factory):
         customer_information=_customer(),
         card_data=_card(),
     )
-    if a_charge.status_code in (200, 202, 402):
-        pid = a_charge.json()["payment_id"]
-        assert b.get_payment(pid).status_code == 404
+    pid = a_charge.json()["payment_id"]
+    assert b.get_payment(pid).status_code == 404
 
 
 def test_get_payment_unknown_returns_404(user):
     assert user.get_payment(str(uuid.uuid4())).status_code == 404
-
-
-# ───────────────────── 3DS card matrix (live Etomin) ─────────────────────
-
-
-@pytest.mark.etomin
-@pytest.mark.parametrize(
-    "card_number,brand,flow,expected",
-    [
-        # 4111... is the universal APPROVED card — Etomin sandbox routes it
-        # through 2D regardless of the 3DS list classification.
-        ("4111111111111111", "Visa", "Frictionless", "APPROVED"),
-        # The remaining 3DS cards (Frictionless or Challenge) all return
-        # PENDING + redirectTo from /sale; the only observable difference is
-        # whether visiting redirectTo shows a user challenge. From the
-        # backend's POV both look the same.
-        ("4000000000002511", "Visa", "Frictionless", "PENDING"),
-        ("4000000000002503", "Visa", "Challenge",    "PENDING"),
-        ("376701078252003",  "Amex", "Challenge",    "PENDING"),
-    ],
-)
-def test_3ds_card_outcomes(admin, user_factory, card_number, brand, flow, expected):
-    """Frictionless 3DS = same code path as APPROVED 2D (no challenge needed).
-    Challenge 3DS = backend persists PENDING + redirectTo and returns 202.
-    Headless integ tests can't actually complete the 3DS challenge in a
-    browser, so for Challenge cards we verify the PENDING shape and that
-    no grants leak into the wallet."""
-    if not _etomin_configured():
-        pytest.skip("ETOMIN_EMAIL / ETOMIN_PASSWORD not set")
-
-    item = _make_iap_item(admin, cost=10, grant_amount=500)
-    u, _ = user_factory()
-    pre = u.get_wallet().json()["soft"]
-
-    r = u.charge_payment(
-        item_id=item["id"],
-        customer_information=_customer(),
-        card_data=_card(card_number),
-    )
-    body = r.json()
-    assert body["status"] == expected, f"{brand} {card_number} ({flow}): got {body}"
-
-    if expected == "APPROVED":
-        assert r.status_code == 200
-        assert body["redirect_to"] is None
-        assert u.get_wallet().json()["soft"] == pre + 500
-    else:  # PENDING (challenge)
-        assert r.status_code == 202
-        assert body["redirect_to"] is not None
-        assert body["redirect_to"].startswith("https://")
-        # Wallet untouched until 3DS completes.
-        assert u.get_wallet().json()["soft"] == pre
-        # Polling /payments/{id} keeps it PENDING (no browser to complete).
-        polled = u.get_payment(body["payment_id"]).json()
-        assert polled["status"] == "PENDING"
-        assert polled["redirect_to"] is not None
-
-
-@pytest.mark.etomin
-def test_3ds_pending_lazy_reconcile_idempotent(admin, user_factory):
-    """Polling /payments/{id} repeatedly on a stuck PENDING never flips to
-    APPROVED on its own (no browser completed 3DS) and never accidentally
-    grants the wallet."""
-    if not _etomin_configured():
-        pytest.skip("ETOMIN_EMAIL / ETOMIN_PASSWORD not set")
-    item = _make_iap_item(admin, grant_amount=500)
-    u, _ = user_factory()
-    r = u.charge_payment(
-        item_id=item["id"],
-        customer_information=_customer(),
-        card_data=_card("4000000000002503"),
-    )
-    pid = r.json()["payment_id"]
-    for _ in range(3):
-        polled = u.get_payment(pid).json()
-        assert polled["status"] == "PENDING"
-    assert u.get_wallet().json()["soft"] == 0

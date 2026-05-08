@@ -31,12 +31,13 @@ jobs:
         run: |
           cp example.env .env
           sed -i 's/^RATE_LIMIT_ENABLED=.*/RATE_LIMIT_ENABLED=false/' .env
-          # Pipe Etomin sandbox creds into the .env so the docker stack picks
-          # them up. Skipped silently when the secrets aren't set (forks).
-          if [ -n "$ETOMIN_EMAIL" ]; then
-            sed -i "s|^ETOMIN_EMAIL=.*|ETOMIN_EMAIL=$ETOMIN_EMAIL|" .env
-            sed -i "s|^ETOMIN_PASSWORD=.*|ETOMIN_PASSWORD=$ETOMIN_PASSWORD|" .env
+          # Etomin sandbox creds are REQUIRED — payment tests run unconditionally.
+          if [ -z "$ETOMIN_EMAIL" ] || [ -z "$ETOMIN_PASSWORD" ]; then
+            echo "::error::ETOMIN_EMAIL / ETOMIN_PASSWORD secrets missing — payment tests cannot run"
+            exit 1
           fi
+          sed -i "s|^ETOMIN_EMAIL=.*|ETOMIN_EMAIL=$ETOMIN_EMAIL|" .env
+          sed -i "s|^ETOMIN_PASSWORD=.*|ETOMIN_PASSWORD=$ETOMIN_PASSWORD|" .env
 
       - name: Build + start stack (output streams to CI log)
         run: docker compose up -d --build --wait

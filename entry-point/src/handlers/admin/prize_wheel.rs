@@ -104,3 +104,19 @@ pub async fn delete_self_cooldown(
     let _: redis::RedisResult<i64> = redis.del(cooldown_key(session.user_id)).await;
     Ok(StatusCode::NO_CONTENT)
 }
+
+/// DELETE /admin/prize-wheel — empty the wheel.
+///
+/// PUT requires a non-empty items array, so without this there's no way to
+/// reach the "no items configured" state. Useful both as an ops escape
+/// hatch and to drive the 503 path in tests.
+pub async fn delete_wheel(
+    State(state): State<AppState>,
+    AdminClaims(_): AdminClaims,
+) -> Result<StatusCode, StatusCode> {
+    sqlx::query("DELETE FROM prize_wheel_items")
+        .execute(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
+}
