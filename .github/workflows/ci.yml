@@ -25,9 +25,18 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Copy example env (rate limiter off — integ runs parallel)
+        env:
+          ETOMIN_EMAIL: ${{ secrets.ETOMIN_EMAIL }}
+          ETOMIN_PASSWORD: ${{ secrets.ETOMIN_PASSWORD }}
         run: |
           cp example.env .env
           sed -i 's/^RATE_LIMIT_ENABLED=.*/RATE_LIMIT_ENABLED=false/' .env
+          # Pipe Etomin sandbox creds into the .env so the docker stack picks
+          # them up. Skipped silently when the secrets aren't set (forks).
+          if [ -n "$ETOMIN_EMAIL" ]; then
+            sed -i "s|^ETOMIN_EMAIL=.*|ETOMIN_EMAIL=$ETOMIN_EMAIL|" .env
+            sed -i "s|^ETOMIN_PASSWORD=.*|ETOMIN_PASSWORD=$ETOMIN_PASSWORD|" .env
+          fi
 
       - name: Build + start stack (output streams to CI log)
         run: docker compose up -d --build --wait
@@ -39,6 +48,10 @@ jobs:
         working-directory: integ-tests
         env:
           INTEG_NO_DOCKER: "1"
+          # Surfaced to pytest so live-Etomin tests run. Empty in forks → those
+          # tests skip via the helper.
+          ETOMIN_EMAIL: ${{ secrets.ETOMIN_EMAIL }}
+          ETOMIN_PASSWORD: ${{ secrets.ETOMIN_PASSWORD }}
         # Serial: battlepass tests share the "active season" fixture and
         # multiple parallel workers race to be the active one, which fails
         # `assert run["active_season_id"] == active_season["id"]`.

@@ -48,8 +48,11 @@ struct SigninRequest<'a> {
 
 #[derive(Deserialize)]
 struct SigninResponse {
+    /// Etomin sandbox returns `authToken`. Fall back to `token` / `data.token`
+    /// for safety against tenant variation.
+    #[serde(rename = "authToken")]
+    auth_token: Option<String>,
     token: Option<String>,
-    /// Some tenants nest the JWT under "data.token". Try both shapes.
     data: Option<SigninResponseData>,
 }
 
@@ -139,7 +142,8 @@ impl EtominClient {
             .await
             .map_err(|e| EtominError::Local(format!("signin parse: {e}")))?;
         let token = parsed
-            .token
+            .auth_token
+            .or(parsed.token)
             .or_else(|| parsed.data.and_then(|d| d.token))
             .ok_or_else(|| EtominError::Local("signin: no token in response".into()))?;
 
