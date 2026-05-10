@@ -67,22 +67,18 @@ def test_admin_grant_overspend_blocked(admin, user):
     assert r.status_code == 422
 
 
-def test_iap_purchase_placeholder(user):
-    """Placeholder IAP purchase returns pending_verification. No real fulfillment."""
+def test_iap_purchase_returns_501(user):
+    """Native-mobile IAP isn't wired yet. Endpoint returns 501 so a
+    misrouted frontend fails loud instead of getting a fake 'success'."""
     r = user.iap_purchase("com.veloz.gems_100", "ios", "BASE64_FAKE_RECEIPT")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["status"] == "pending_verification"
-    assert body["product_id"] == "com.veloz.gems_100"
-    # Wallet unchanged — placeholder doesn't credit.
+    assert r.status_code == 501
+    # Wallet unchanged.
     assert user.get_wallet().json()["high"] == 0
 
 
-def test_iap_validate_placeholder(user):
-    """Placeholder validate always returns valid=true (no real receipt check)."""
+def test_iap_validate_returns_501(user):
     r = user.iap_validate("com.veloz.any", "android", "fake")
-    assert r.status_code == 200
-    assert r.json()["valid"] is True
+    assert r.status_code == 501
 
 
 def test_wallet_requires_auth(api):
