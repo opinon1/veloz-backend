@@ -55,6 +55,37 @@ def test_non_admin_cannot_manage_characters(user):
     assert user.admin_list_characters().status_code == 403
 
 
+@pytest.mark.admin
+def test_character_metadata_roundtrip(admin, user):
+    """Admin attaches frontend-only metadata; it round-trips through the
+    user-facing GET /characters."""
+    meta = {"sort_order": 3, "lore": "ancient warrior", "vfx": ["glow", "trail"]}
+    char = admin.admin_create_character(name=rand_character_name(), metadata=meta).json()
+    assert char["metadata"] == meta
+
+    # User-facing list exposes the same blob.
+    rows = user.list_characters().json()
+    row = next(c for c in rows if c["id"] == char["id"])
+    assert row["metadata"] == meta
+
+    # Update replaces metadata wholesale (no merge).
+    new_meta = {"sort_order": 9}
+    upd = admin.admin_update_character(char["id"], metadata=new_meta).json()
+    assert upd["metadata"] == new_meta
+    rows = user.list_characters().json()
+    row = next(c for c in rows if c["id"] == char["id"])
+    assert row["metadata"] == new_meta
+
+
+@pytest.mark.admin
+def test_character_metadata_defaults_to_empty_object(admin, user):
+    char = admin.admin_create_character(name=rand_character_name()).json()
+    assert char["metadata"] == {}
+    rows = user.list_characters().json()
+    row = next(c for c in rows if c["id"] == char["id"])
+    assert row["metadata"] == {}
+
+
 # ───────────────────── User listing ─────────────────────
 
 

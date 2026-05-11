@@ -9,6 +9,16 @@ pub struct CreateCharacterRequest {
     pub name: String,
     #[serde(default)]
     pub default_unlocked: bool,
+    /// Free-form frontend metadata (animation hints, sort order, lore,
+    /// etc). Stored as-is, not interpreted by the backend. Defaults to
+    /// `{}` rather than serde's `Null` so the column matches the DB
+    /// default.
+    #[serde(default = "empty_object")]
+    pub metadata: serde_json::Value,
+}
+
+fn empty_object() -> serde_json::Value {
+    serde_json::Value::Object(Default::default())
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -17,6 +27,7 @@ pub struct CharacterRow {
     pub name: String,
     pub is_active: bool,
     pub default_unlocked: bool,
+    pub metadata: serde_json::Value,
 }
 
 pub async fn create_character(
@@ -30,13 +41,14 @@ pub async fn create_character(
 
     let row = sqlx::query_as::<_, CharacterRow>(
         r#"
-        INSERT INTO characters (name, default_unlocked)
-        VALUES ($1, $2)
-        RETURNING id, name, is_active, default_unlocked
+        INSERT INTO characters (name, default_unlocked, metadata)
+        VALUES ($1, $2, $3)
+        RETURNING id, name, is_active, default_unlocked, metadata
         "#,
     )
     .bind(&payload.name)
     .bind(payload.default_unlocked)
+    .bind(&payload.metadata)
     .fetch_one(&state.db)
     .await
     .map_err(|e| match e {
@@ -52,7 +64,7 @@ pub async fn list_all_characters(
     AdminClaims(_): AdminClaims,
 ) -> Result<Json<Vec<CharacterRow>>, StatusCode> {
     let rows = sqlx::query_as::<_, CharacterRow>(
-        "SELECT id, name, is_active, default_unlocked FROM characters ORDER BY created_at DESC",
+        "SELECT id, name, is_active, default_unlocked, metadata FROM characters ORDER BY created_at DESC",
     )
     .fetch_all(&state.db)
     .await
@@ -66,6 +78,7 @@ pub struct UpdateCharacterRequest {
     pub name: Option<String>,
     pub is_active: Option<bool>,
     pub default_unlocked: Option<bool>,
+    pub metadata: Option<serde_json::Value>,
 }
 
 pub async fn update_character(
@@ -86,15 +99,17 @@ pub async fn update_character(
             name             = COALESCE($2, name),
             is_active        = COALESCE($3, is_active),
             default_unlocked = COALESCE($4, default_unlocked),
+            metadata         = COALESCE($5, metadata),
             updated_at       = CURRENT_TIMESTAMP
         WHERE id = $1
-        RETURNING id, name, is_active, default_unlocked
+        RETURNING id, name, is_active, default_unlocked, metadata
         "#,
     )
     .bind(id)
     .bind(&payload.name)
     .bind(payload.is_active)
     .bind(payload.default_unlocked)
+    .bind(&payload.metadata)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| match e {

@@ -10,6 +10,8 @@ pub struct CharacterView {
     pub unlocked: bool,
     pub equipped_skin: Option<Uuid>,
     pub related_skins: Vec<Uuid>,
+    /// Free-form frontend metadata set by admin on the character row.
+    pub metadata: serde_json::Value,
 }
 
 #[derive(sqlx::FromRow)]
@@ -18,6 +20,7 @@ struct Row {
     unlocked: Option<bool>,
     equipped_skin_id: Option<Uuid>,
     default_unlocked: bool,
+    metadata: serde_json::Value,
 }
 
 #[derive(sqlx::FromRow)]
@@ -34,6 +37,7 @@ struct SkinIdRow {
 ///                     `default_unlocked = true`)
 ///   equipped_skin   — the user's equipped skin for this character, or null
 ///   related_skins   — every active skin assigned to this character
+///   metadata        — opaque JSON the admin set on the row
 pub async fn list_characters(
     State(state): State<AppState>,
     Claims(session): Claims,
@@ -44,7 +48,8 @@ pub async fn list_characters(
             c.id,
             uc.unlocked,
             uc.equipped_skin_id,
-            c.default_unlocked
+            c.default_unlocked,
+            c.metadata
         FROM characters c
         LEFT JOIN user_characters uc
             ON uc.character_id = c.id AND uc.user_id = $1
@@ -81,6 +86,7 @@ pub async fn list_characters(
             unlocked: c.unlocked.unwrap_or(c.default_unlocked),
             equipped_skin: c.equipped_skin_id,
             related_skins: by_char.remove(&c.id).unwrap_or_default(),
+            metadata: c.metadata,
         })
         .collect();
 
