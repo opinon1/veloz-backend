@@ -204,6 +204,12 @@ pub async fn update_item(
     Ok(Json(row))
 }
 
+/// Hard DELETE only works when the item has never been bought or paid for.
+/// `store_purchases.item_id` and `payments.item_id` both FK here; the
+/// payments one is explicitly ON DELETE RESTRICT, the purchases one defaults
+/// to NO ACTION. Either way Postgres blocks the delete with 23503 once any
+/// referencing row exists. We map that to 409 + a hint to use
+/// `PATCH /admin/store/{id}` with `is_active=false` instead.
 pub async fn delete_item(
     State(state): State<AppState>,
     AdminClaims(_): AdminClaims,
@@ -213,7 +219,12 @@ pub async fn delete_item(
         .bind(id)
         .execute(&state.db)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| match e {
+            sqlx::Error::Database(db) if db.code().as_deref() == Some("23503") => {
+                StatusCode::CONFLICT
+            }
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
 
     if result.rows_affected() == 0 {
         return Err(StatusCode::NOT_FOUND);

@@ -186,6 +186,34 @@ def test_admin_store_crud(admin):
 
 
 @pytest.mark.admin
+def test_admin_delete_store_item_with_purchase_returns_409(admin, user):
+    """Once an item has been bought, hard DELETE is blocked by the
+    store_purchases FK. Admin should soft-delete via is_active=false
+    instead. Verify the explicit 409 + that the row survived."""
+    item = admin.admin_create_store_item(
+        name=rand_item_name(),
+        item_type="currency_bundle",
+        cost=10,
+        currency="soft",
+        payload=[{"type": "currency", "currency": "soft", "amount": 1}],
+    ).json()
+    admin.admin_grant(user.get_profile().json()["user_id"], "soft", 50)
+    assert user.purchase_store_item(item["id"]).status_code == 200
+
+    # Now the FK to store_purchases blocks DELETE.
+    assert admin.admin_delete_store_item(item["id"]).status_code == 409
+
+    # Item still in admin list.
+    ids = [i["id"] for i in admin.admin_list_store_items().json()]
+    assert item["id"] in ids
+
+    # Soft-delete works.
+    admin.admin_update_store_item(item["id"], is_active=False)
+    public_ids = [i["id"] for i in admin._c.raw_get("/store").json()]
+    assert item["id"] not in public_ids
+
+
+@pytest.mark.admin
 def test_admin_list_store_items_shows_inactive(admin):
     """GET /admin/store returns both active + inactive items (unlike public /store)."""
     active = admin.admin_create_store_item(
