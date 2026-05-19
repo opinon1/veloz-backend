@@ -233,7 +233,10 @@ export class VelozStack extends cdk.Stack {
     const service = new ecs.FargateService(this, "Service", {
       cluster,
       taskDefinition: taskDef,
-      desiredCount: 1,
+      // 2 Spot tasks. ECS spreads them across AZs by default, so a Spot
+      // eviction in one AZ leaves the other task healthy and the ALB
+      // serves uninterrupted. Bumps compute from ~$3 to ~$6/mo.
+      desiredCount: 2,
       assignPublicIp: true,
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
       securityGroups: [taskSg],
@@ -242,9 +245,10 @@ export class VelozStack extends cdk.Stack {
       ],
       circuitBreaker: { rollback: true },
       enableExecuteCommand: true,
-      // 100/200: rolling deploy starts new task before stopping old to zero
-      // downtime even at desiredCount=1.
-      minHealthyPercent: 100,
+      // 50/200: tolerate one task being unhealthy (Spot eviction) while
+      // a replacement is launching, and allow rolling deploys to spin up
+      // a third task before draining either of the existing two.
+      minHealthyPercent: 50,
       maxHealthyPercent: 200,
     });
 
@@ -253,11 +257,13 @@ export class VelozStack extends cdk.Stack {
     // Rolling deploy with circuit breaker rolls back on failure.
 
     // ──────────────────────────────────────────────────────────
-    // Autoscaling: 1–3 tasks on CPU 70%.
+    // Autoscaling: 2–4 tasks on CPU 70%. Min stays at 2 so the
+    // autoscaler never collapses back to a single task (which would
+    // re-introduce the Spot-eviction downtime).
     // ──────────────────────────────────────────────────────────
     const scaling = service.autoScaleTaskCount({
-      minCapacity: 1,
-      maxCapacity: 3,
+      minCapacity: 2,
+      maxCapacity: 4,
     });
     scaling.scaleOnCpuUtilization("CpuScaling", {
       targetUtilizationPercent: 70,
