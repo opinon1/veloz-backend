@@ -9,6 +9,9 @@ import * as rds from "aws-cdk-lib/aws-rds";
 import * as elasticache from "aws-cdk-lib/aws-elasticache";
 import * as secrets from "aws-cdk-lib/aws-secretsmanager";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as route53 from "aws-cdk-lib/aws-route53";
+import * as route53targets from "aws-cdk-lib/aws-route53-targets";
+import * as acm from "aws-cdk-lib/aws-certificatemanager";
 
 interface VelozStackProps extends cdk.StackProps {
   repositoryName: string;
@@ -272,7 +275,31 @@ export class VelozStack extends cdk.Stack {
     });
 
     // ──────────────────────────────────────────────────────────
-    // ALB (HTTP only, port 80 to task port 81).
+    // Custom domain + TLS.
+    //   domainName    — apex registered in Route53 (this account)
+    //   apiDomainName — the host the API answers on
+    // ──────────────────────────────────────────────────────────
+    const domainName =
+      (this.node.tryGetContext("domainName") as string) ?? "velozthegame.com";
+    const apiDomainName =
+      (this.node.tryGetContext("apiDomainName") as string) ??
+      `api.${domainName}`;
+
+    // Hosted zone is auto-created when the domain is registered through
+    // Route53. fromLookup resolves it at synth time.
+    const zone = route53.HostedZone.fromLookup(this, "Zone", {
+      domainName,
+    });
+
+    // DNS-validated cert. Zone is in this account so CDK creates the
+    // validation records and waits — fully hands-off.
+    const cert = new acm.Certificate(this, "ApiCert", {
+      domainName: apiDomainName,
+      validation: acm.CertificateValidation.fromDns(zone),
+    });
+
+    // ──────────────────────────────────────────────────────────
+    // ALB: :443 serves the app (TLS), :80 301-redirects to :443.
     // ──────────────────────────────────────────────────────────
     const alb = new elbv2.ApplicationLoadBalancer(this, "Alb", {
       vpc,
@@ -280,13 +307,14 @@ export class VelozStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
     });
 
-    const listener = alb.addListener("HttpListener", {
-      port: 80,
-      protocol: elbv2.ApplicationProtocol.HTTP,
+    const httpsListener = alb.addListener("HttpsListener", {
+      port: 443,
+      protocol: elbv2.ApplicationProtocol.HTTPS,
+      certificates: [cert],
       open: true,
     });
 
-    listener.addTargets("AppTargets", {
+    httpsListener.addTargets("AppTargets", {
       port: 81,
       protocol: elbv2.ApplicationProtocol.HTTP,
       targets: [service],
@@ -301,6 +329,31 @@ export class VelozStack extends cdk.Stack {
       deregistrationDelay: cdk.Duration.seconds(15),
     });
 
+    // Port 80 → permanent redirect to HTTPS. No target group.
+    // Reuses the original "HttpListener" logical id so CloudFormation
+    // updates the existing port-80 listener in place (swaps action
+    // forward→redirect) instead of failing to bind a second listener
+    // on a port that's already in use.
+    alb.addListener("HttpListener", {
+      port: 80,
+      protocol: elbv2.ApplicationProtocol.HTTP,
+      open: true,
+      defaultAction: elbv2.ListenerAction.redirect({
+        protocol: "HTTPS",
+        port: "443",
+        permanent: true,
+      }),
+    });
+
+    // api.velozthegame.com → ALB.
+    new route53.ARecord(this, "ApiAlias", {
+      zone,
+      recordName: apiDomainName.replace(`.${domainName}`, ""),
+      target: route53.RecordTarget.fromAlias(
+        new route53targets.LoadBalancerTarget(alb)
+      ),
+    });
+
     // ALB SG to task SG on port 81.
     taskSg.addIngressRule(
       ec2.Peer.securityGroupId(alb.connections.securityGroups[0].securityGroupId),
@@ -311,6 +364,7 @@ export class VelozStack extends cdk.Stack {
     // ──────────────────────────────────────────────────────────
     // Outputs.
     // ──────────────────────────────────────────────────────────
+    new cdk.CfnOutput(this, "ApiUrl", { value: `https://${apiDomainName}` });
     new cdk.CfnOutput(this, "AlbDns", { value: alb.loadBalancerDnsName });
     new cdk.CfnOutput(this, "RepoUri", { value: repo.repositoryUri });
     new cdk.CfnOutput(this, "ClusterName", { value: cluster.clusterName });
