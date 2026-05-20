@@ -9,6 +9,7 @@ mod leveling;
 use axum::{routing::get, Router};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use state::AppState;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -113,6 +114,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/prize-wheel", handlers::prize_wheel::router::router())
         .nest("/payments", handlers::payments::router::router())
         .nest("/admin", handlers::admin::router::router())
+        // Permissive CORS: any origin, any method, any header. Auth tokens
+        // travel as Bearer in the Authorization header (not cookies), so the
+        // credentials-omitted policy is fine. Tighten allowed_origin to a
+        // specific list before production hardening if needed.
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
