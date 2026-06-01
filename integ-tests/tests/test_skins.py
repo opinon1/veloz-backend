@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from helpers.factory import admin_make_character, admin_make_skin
+from helpers.factory import admin_make_character, admin_make_skin, quote_price
 
 
 @pytest.fixture
@@ -68,17 +68,19 @@ def test_purchase_with_insufficient_funds(user, paid_skin):
 
 
 def test_purchase_deducts_and_records_ownership(user, admin, paid_skin):
-    """Grant soft, purchase, verify wallet decreased + user_skins row exists."""
+    """Grant soft, purchase, verify wallet decreased + user_skins row exists.
+    Dynamic per-user pricing: quote first, then assert the actual charge."""
     user_id = user.get_profile().json()["user_id"]
     admin.admin_grant(user_id, "soft", 500)
+    expected = quote_price(user, "skin", paid_skin["id"])
 
     r = user.purchase_skin(paid_skin["id"])
     assert r.status_code == 200
     body = r.json()
     assert body["skin_id"] == paid_skin["id"]
-    assert body["cost_paid"] == 100
+    assert body["cost_paid"] == expected
     assert body["currency"] == "soft"
-    assert body["new_balance"] == 400
+    assert body["new_balance"] == 500 - expected
 
     owned = user.owned_skins().json()
     assert paid_skin["id"] in [s["id"] for s in owned]
@@ -88,10 +90,11 @@ def test_double_purchase_rejected(user, admin, paid_skin):
     """Purchasing an already-owned skin → 409 Conflict (no double-charge)."""
     user_id = user.get_profile().json()["user_id"]
     admin.admin_grant(user_id, "soft", 500)
+    expected = quote_price(user, "skin", paid_skin["id"])
     assert user.purchase_skin(paid_skin["id"]).status_code == 200
     assert user.purchase_skin(paid_skin["id"]).status_code == 409
     # Balance only charged once.
-    assert user.get_wallet().json()["soft"] == 400
+    assert user.get_wallet().json()["soft"] == 500 - expected
 
 
 def test_purchase_free_skin(user, free_skin):

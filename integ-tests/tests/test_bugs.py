@@ -22,6 +22,7 @@ from helpers.api import AuthedClient
 from helpers.factory import (
     admin_make_skin,
     make_creds,
+    quote_price,
     rand_item_name,
 )
 
@@ -37,6 +38,7 @@ def test_skin_purchase_is_race_safe(base_url, admin, user):
     skin = admin_make_skin(admin, cost=100, currency="soft")
     user_id = user.get_profile().json()["user_id"]
     admin.admin_grant(user_id, "soft", 500)
+    expected = quote_price(user, "skin", skin["id"])
 
     async def go() -> list[httpx.Response]:
         async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
@@ -49,8 +51,8 @@ def test_skin_purchase_is_race_safe(base_url, admin, user):
     responses = asyncio.run(go())
     codes = sorted(r.status_code for r in responses)
     assert codes == [200, 409], f"expected [200, 409], got {codes}"
-    # Wallet charged exactly once.
-    assert user.get_wallet().json()["soft"] == 400
+    # Wallet charged exactly once at the dynamic price.
+    assert user.get_wallet().json()["soft"] == 500 - expected
 
 
 # ─────────────────── [RACE] battlepass unlock-premium ───────────────────

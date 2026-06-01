@@ -89,3 +89,15 @@ def rand_item_name(prefix: str = "Item") -> str:
 
 def rand_season_name() -> str:
     return f"Season_{rand_suffix(6)}"
+
+
+def quote_price(user, kind: str, item_id: str) -> int:
+    """Return the per-user `cost_for_you` the server will charge for
+    one catalog row. Use before any test that asserts on `cost_paid`
+    or wallet deltas — dynamic pricing puts the actual charged value
+    in a `[0.85·base, 1.15·base]` band at total_xp = 0."""
+    rows = user.list_my_prices().json()
+    for r in rows:
+        if r["kind"] == kind and r["id"] == item_id:
+            return int(r["cost_for_you"])
+    raise AssertionError(f"No price row for ({kind}, {item_id}) in /me/prices")

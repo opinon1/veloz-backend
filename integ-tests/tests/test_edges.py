@@ -22,6 +22,7 @@ from helpers.factory import (
     admin_make_character,
     admin_make_skin,
     make_creds,
+    quote_price,
     rand_character_name,
     rand_email,
     rand_item_name,
@@ -385,6 +386,7 @@ def test_concurrent_purchases_of_different_items_both_succeed(base_url, admin, u
     s1 = admin_make_skin(admin, cost=10, currency="soft")
     s2 = admin_make_skin(admin, cost=15, currency="soft")
     admin.admin_grant(user.get_profile().json()["user_id"], "soft", 100)
+    expected = quote_price(user, "skin", s1["id"]) + quote_price(user, "skin", s2["id"])
 
     async def go() -> list[httpx.Response]:
         async with httpx.AsyncClient(base_url=base_url, timeout=10) as c:
@@ -396,7 +398,7 @@ def test_concurrent_purchases_of_different_items_both_succeed(base_url, admin, u
 
     rs = asyncio.run(go())
     assert all(r.status_code == 200 for r in rs)
-    assert user.get_wallet().json()["soft"] == 75
+    assert user.get_wallet().json()["soft"] == 100 - expected
     owned_ids = [s["id"] for s in user.owned_skins().json()]
     assert s1["id"] in owned_ids and s2["id"] in owned_ids
 

@@ -60,9 +60,10 @@ def test_my_prices_requires_auth(api):
     assert api.raw_get("/me/prices").status_code == 401
 
 
-def test_my_prices_collapses_to_base_at_zero_xp(admin, user):
-    """Brand-new user sits at total_xp=0, where the sine and linear
-    terms zero out. Catalog cost == cost_for_you for every entry."""
+def test_my_prices_zero_xp_lives_within_sine_band(admin, user):
+    """Brand-new user (total_xp = 0) already sees per-(user, item)
+    divergence — every cost_for_you sits inside `[0.85·base, 1.15·base]`
+    (the sine band) since the linear term contributes zero at x = 0."""
     char = admin_make_character(admin)
     s = admin_make_skin(admin, char["id"], cost=120, currency="soft")
     a = admin_make_avatar(admin, price=80, currency="soft")
@@ -77,10 +78,17 @@ def test_my_prices_collapses_to_base_at_zero_xp(admin, user):
 
     rows = user.list_my_prices().json()
     by_id = {(r["kind"], r["id"]): r for r in rows}
-    assert by_id[("skin", s["id"])]["cost_for_you"] == 120
-    assert by_id[("avatar", a["id"])]["cost_for_you"] == 80
-    assert by_id[("frame", f["id"])]["cost_for_you"] == 200
-    assert by_id[("store", item["id"])]["cost_for_you"] == 350
+    for kind, item_id, base in [
+        ("skin", s["id"], 120),
+        ("avatar", a["id"], 80),
+        ("frame", f["id"], 200),
+        ("store", item["id"], 350),
+    ]:
+        got = by_id[(kind, item_id)]["cost_for_you"]
+        lo = round(base * 0.85)
+        hi = round(base * 1.15)
+        assert lo <= got <= hi, f"{kind}={got} outside [{lo},{hi}]"
+        assert by_id[(kind, item_id)]["base_cost"] == base
 
 
 def test_my_prices_excludes_iap_items(admin, user):
@@ -180,14 +188,16 @@ def test_linear_growth_dominates_at_high_xp(admin, user):
 
 def test_account_multiplier_stacks(admin, user):
     """profile.price_multiplier is honored on top of the dynamic curve.
-    At total_xp = 0, dynamic factor = 1, so cost_for_you ≈ base · pm."""
+    At total_xp = 0 the dynamic factor lives in `[1-A, 1+A]`, so the
+    final cost lives in `[(1-A)·base·pm, (1+A)·base·pm]`."""
     char = admin_make_character(admin)
     skin = admin_make_skin(admin, char["id"], cost=100, currency="soft")
     uid = user.get_profile().json()["user_id"]
     _set_price_multiplier(uid, 0.5)
 
     p = next(r for r in user.list_my_prices().json() if r["id"] == skin["id"])
-    assert p["cost_for_you"] == 50
+    # base=100, pm=0.5 → trend 50, ±15% band → [43, 58].
+    assert 43 <= p["cost_for_you"] <= 58
 
 
 def test_base_cost_field_is_admin_set_cost(admin, user):

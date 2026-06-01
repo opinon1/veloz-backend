@@ -9,12 +9,13 @@
 //!
 //!   x = total_xp / XP_DIVISOR
 //!   φ = stable hash of (user_id, item_id) mapped into [0, 2π)
-//!   m(x) = 1 + SLOPE·x + AMPLITUDE·(sin(OMEGA·x + φ) − sin(φ))
+//!   m(x) = 1 + SLOPE·x + AMPLITUDE·sin(OMEGA·x + φ)
 //!
-//! The `− sin(φ)` term anchors the sine to zero at x = 0 so a brand-
-//! new user (total_xp = 0) sees the base price unchanged. As they
-//! grind XP, the linear term pulls prices up while the sine wave
-//! produces ~6.28-level dips along the way.
+//! The sine term is NOT anchored, so even a brand-new user
+//! (total_xp = 0) already sees per-(user, item) divergence in the
+//! `[1 − AMPLITUDE, 1 + AMPLITUDE]` band. As they grind XP, the
+//! linear term pulls prices upward forever while the sine continues
+//! to wobble around the trend.
 //!
 //! Final cost: `round(base_cost · m(x) · profiles.price_multiplier)`.
 //! The two multipliers stack so an admin discount on the profile is
@@ -59,9 +60,7 @@ fn phase(user_id: Uuid, item_id: Uuid) -> f64 {
 pub fn dynamic_multiplier(user_id: Uuid, item_id: Uuid, total_xp: i64) -> f64 {
     let x = (total_xp.max(0) as f64) / XP_DIVISOR;
     let phi = phase(user_id, item_id);
-    // sin(omega·x + φ) - sin(φ) keeps the sine zero at x = 0.
-    let sine = (SINE_OMEGA * x + phi).sin() - phi.sin();
-    let m = 1.0 + LINEAR_SLOPE * x + SINE_AMPLITUDE * sine;
+    let m = 1.0 + LINEAR_SLOPE * x + SINE_AMPLITUDE * (SINE_OMEGA * x + phi).sin();
     m.max(0.0)
 }
 
@@ -101,15 +100,24 @@ mod tests {
     }
 
     #[test]
-    fn zero_xp_yields_base_cost() {
-        // x = 0 → m = 1 for every (user, item) pair. Sanity check that
-        // existing flows (level-1 users) keep paying exact base price.
+    fn zero_xp_already_diverges_within_band() {
+        // x = 0 → m = 1 + AMPLITUDE·sin(φ), bounded by [1 - A, 1 + A].
+        // Every (user, item) pair lands in that band, and the
+        // distribution is wide enough that not all pairs share a value.
+        let mut seen = std::collections::HashSet::new();
         for u in 1..50u128 {
             for i in 1..50u128 {
-                let cost = apply_dynamic_price(100, uid(u), uid(i), 0, 1.0);
-                assert_eq!(cost, 100, "user={u} item={i}");
+                let cost = apply_dynamic_price(1000, uid(u), uid(i), 0, 1.0);
+                let lo = (1000.0 * (1.0 - SINE_AMPLITUDE)).round() as i64;
+                let hi = (1000.0 * (1.0 + SINE_AMPLITUDE)).round() as i64;
+                assert!(
+                    cost >= lo && cost <= hi,
+                    "user={u} item={i} cost={cost} band=[{lo},{hi}]"
+                );
+                seen.insert(cost);
             }
         }
+        assert!(seen.len() > 50, "expected diverse prices, got {} distinct", seen.len());
     }
 
     #[test]
@@ -134,9 +142,13 @@ mod tests {
 
     #[test]
     fn stacks_with_account_multiplier() {
+        // With anchor removed the dynamic factor at x=0 lives in
+        // [1 - A, 1 + A]. account_multiplier = 0.5 ⇒ result lives in
+        // [(1 - A)·50, (1 + A)·50] = [42.5, 57.5] → rounded [43, 58].
         let cost = apply_dynamic_price(100, uid(1), uid(2), 0, 0.5);
-        // x=0 → dynamic m = 1; account_multiplier = 0.5; expect 50.
-        assert_eq!(cost, 50);
+        let lo = (50.0 * (1.0 - SINE_AMPLITUDE)).round() as i64;
+        let hi = (50.0 * (1.0 + SINE_AMPLITUDE)).round() as i64;
+        assert!(cost >= lo && cost <= hi, "got {cost}, band [{lo},{hi}]");
     }
 
     #[test]

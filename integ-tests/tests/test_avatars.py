@@ -10,6 +10,7 @@ import pytest
 
 from helpers.factory import (
     admin_make_avatar,
+    quote_price,
     rand_avatar_name,
 )
 
@@ -112,7 +113,10 @@ def test_select_reflects_in_profile_and_leaderboard(admin, user):
     assert profile["avatar_url"] == a["id"]
 
     user.submit_run(score=42, distance=0, coins_collected=0, duration_ms=1)
-    rows = user.leaderboard().json()
+    # Larger limit so dynamic-pricing test runs that leave many high-
+    # XP users in the DB don't push the freshly-submitted score=42
+    # row out of the top slice.
+    rows = user.leaderboard(limit=500).json()
     me = next(r for r in rows if r["user_id"] == profile["user_id"])
     assert me["avatar_url"] == a["id"]
 
@@ -146,20 +150,25 @@ def test_deselect_clears_selection(admin, user):
 
 
 def test_purchase_with_insufficient_funds(user, admin):
+    # base = 999, dynamic band lands in roughly [849, 1149]. The user
+    # has 0 soft, so 422 fires regardless of where on the band we land.
     a = admin_make_avatar(admin, price=999, currency="soft")
     r = user.purchase_avatar(a["id"])
     assert r.status_code == 422
 
 
 def test_purchase_deducts_currency(user, admin):
+    # Dynamic per-user pricing: quote first, then assert the exact
+    # amount the server actually charges.
     a = admin_make_avatar(admin, price=50, currency="soft")
     admin.admin_grant(user.get_profile().json()["user_id"], "soft", 200)
+    expected = quote_price(user, "avatar", a["id"])
     r = user.purchase_avatar(a["id"])
     assert r.status_code == 200
     body = r.json()
     assert body["avatar_id"] == a["id"]
-    assert body["cost_paid"] == 50
-    assert body["new_balance"] == 150
+    assert body["cost_paid"] == expected
+    assert body["new_balance"] == 200 - expected
 
 
 def test_purchase_free_avatar_returns_real_balance(user, admin):

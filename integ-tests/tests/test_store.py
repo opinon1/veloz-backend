@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from helpers.factory import admin_make_skin, rand_item_name
+from helpers.factory import admin_make_skin, quote_price, rand_item_name
 
 
 @pytest.fixture
@@ -96,15 +96,16 @@ def test_purchase_insufficient_funds(user, soft_bundle):
 def test_currency_bundle_fulfillment(user, admin, soft_bundle):
     """Buying a soft bundle grants the soft currency in the payload."""
     admin.admin_grant(user.get_profile().json()["user_id"], "high", 200)
+    expected = quote_price(user, "store", soft_bundle["id"])
 
     r = user.purchase_store_item(soft_bundle["id"])
     assert r.status_code == 200
     body = r.json()
-    assert body["cost_paid"] == 100
+    assert body["cost_paid"] == expected
     assert body["currency_paid"] == "high"
-    # After: high decreased by 100, soft increased by 500.
+    # After: high decreased by `expected`, soft increased by 500 (payload).
     w = user.get_wallet().json()
-    assert w["high"] == 100
+    assert w["high"] == 200 - expected
     assert w["soft"] == 500
 
 
@@ -121,6 +122,7 @@ def test_multi_grant_bundle_fulfills_everything(user, admin, multi_grant_bundle)
     currency) must apply ALL grants in the same transaction."""
     user_id = user.get_profile().json()["user_id"]
     admin.admin_grant(user_id, "high", 50)
+    expected = quote_price(user, "store", multi_grant_bundle["item"]["id"])
 
     r = user.purchase_store_item(multi_grant_bundle["item"]["id"])
     assert r.status_code == 200
@@ -129,9 +131,9 @@ def test_multi_grant_bundle_fulfills_everything(user, admin, multi_grant_bundle)
     assert multi_grant_bundle["skin"]["id"] in [
         s["id"] for s in user.owned_skins().json()
     ]
-    # Both currency grants applied; high paid the cost.
+    # Both currency grants applied; high paid the dynamic cost.
     w = user.get_wallet().json()
-    assert w["high"] == 40   # 50 starting - 10 cost
+    assert w["high"] == 50 - expected
     assert w["soft"] == 100
     assert w["energy"] == 5
 
@@ -143,15 +145,19 @@ def test_iap_item_not_purchasable_via_store(user, iap_item):
 
 
 def test_price_multiplier_discount(user, admin, soft_bundle):
-    """profile.price_multiplier < 1.0 → buyer charged less than listed cost."""
+    """profile.price_multiplier < 1.0 → buyer charged less than listed cost.
+    Dynamic noise still applies on top — quote to get the exact amount."""
     user_id = user.get_profile().json()["user_id"]
     admin.admin_update_user_profile(user_id, price_multiplier=0.5)
     admin.admin_grant(user_id, "high", 200)
+    expected = quote_price(user, "store", soft_bundle["id"])
 
     r = user.purchase_store_item(soft_bundle["id"])
     assert r.status_code == 200
-    assert r.json()["cost_paid"] == 50
-    assert user.get_wallet().json()["high"] == 150
+    assert r.json()["cost_paid"] == expected
+    # base=100, pm=0.5 → trend 50, ±15% sine band → cost lives in [43, 58].
+    assert 43 <= expected <= 58
+    assert user.get_wallet().json()["high"] == 200 - expected
 
 
 def test_purchase_nonexistent_item(user):

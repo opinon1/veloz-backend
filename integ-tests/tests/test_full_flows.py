@@ -21,6 +21,7 @@ from helpers.factory import (
     admin_make_frame,
     admin_make_skin,
     make_creds,
+    quote_price,
     rand_avatar_name,
     rand_character_name,
     rand_frame_name,
@@ -115,17 +116,22 @@ def test_full_skin_purchase_run_out_of_currency_recover(admin, user):
 
     Verifies: ownership recorded each step, wallet running balance correct,
     insufficient-funds gate fires + recovers, no double-grant on the
-    already-owned check."""
+    already-owned check.
+
+    Dynamic per-user pricing puts each skin in a `[0.85·base, 1.15·base]`
+    band, so we quote each price before granting + asserting."""
     char = admin_make_character(admin)
     a = admin_make_skin(admin, char["id"], cost=100, currency="soft")
     b = admin_make_skin(admin, char["id"], cost=200, currency="soft")
     uid = user.get_profile().json()["user_id"]
+    price_a = quote_price(user, "skin", a["id"])
+    price_b = quote_price(user, "skin", b["id"])
 
     # No funds → 422
     assert user.purchase_skin(a["id"]).status_code == 422
 
-    # Grant 100 → buy A → wallet 0
-    admin.admin_grant(uid, "soft", 100)
+    # Grant exact price → buy A → wallet 0
+    admin.admin_grant(uid, "soft", price_a)
     assert user.purchase_skin(a["id"]).status_code == 200
     assert user.get_wallet().json()["soft"] == 0
     owned = [s["id"] for s in user.owned_skins().json()]
@@ -135,11 +141,11 @@ def test_full_skin_purchase_run_out_of_currency_recover(admin, user):
     assert user.purchase_skin(a["id"]).status_code == 409
     assert user.get_wallet().json()["soft"] == 0
 
-    # B costs 200 → 422
+    # B costs more than nothing → 422
     assert user.purchase_skin(b["id"]).status_code == 422
 
-    # Grant 250 → buy B → wallet 50
-    admin.admin_grant(uid, "soft", 250)
+    # Grant 50 over → buy B → wallet 50
+    admin.admin_grant(uid, "soft", price_b + 50)
     assert user.purchase_skin(b["id"]).status_code == 200
     assert user.get_wallet().json()["soft"] == 50
     owned = [s["id"] for s in user.owned_skins().json()]
@@ -311,9 +317,13 @@ def test_full_battlepass_progression_flow(admin, user):
 
 
 def test_full_store_bundle_buy_then_use_currency(admin, user):
-    """User has 200 high, no soft. Store sells "200 soft for 50 high" bundle.
-    Buy → wallet shows 150 high + 200 soft. Then buy a 200-soft skin → drains
-    wallet → owned. Repeat: out of soft → 422 → buy bundle again → recover."""
+    """User has 1000 high, no soft. Store sells "200 soft for 50 high"
+    bundle. Buy → wallet shows (1000 - bundle_quote) high + 200 soft.
+    Then buy a 200-soft skin → drains wallet → owned. Repeat: out of
+    soft → 422 → buy bundle again → recover.
+
+    Granting 1000 high up front + quoting every charged amount keeps
+    the flow robust against dynamic-pricing wobble."""
     bundle = admin.admin_create_store_item(
         name=rand_item_name("Bundle"),
         item_type="currency_bundle",
@@ -325,25 +335,40 @@ def test_full_store_bundle_buy_then_use_currency(admin, user):
     skin = admin_make_skin(admin, char["id"], cost=200, currency="soft")
 
     uid = user.get_profile().json()["user_id"]
-    admin.admin_grant(uid, "high", 200)
+    admin.admin_grant(uid, "high", 1000)
+    bundle_price = quote_price(user, "store", bundle["id"])
+    skin_price = quote_price(user, "skin", skin["id"])
 
     r = user.purchase_store_item(bundle["id"])
     assert r.status_code == 200
     w = user.get_wallet().json()
-    assert w["high"] == 150 and w["soft"] == 200
+    assert w["high"] == 1000 - bundle_price
+    assert w["soft"] == 200
 
-    # Buy skin (200 soft) → soft 0
+    # Top up soft so the first-skin buy clears even at top-of-band.
+    if skin_price > 200:
+        admin.admin_grant(uid, "soft", skin_price - 200)
+    pre = user.get_wallet().json()["soft"]
     assert user.purchase_skin(skin["id"]).status_code == 200
-    assert user.get_wallet().json()["soft"] == 0
+    assert user.get_wallet().json()["soft"] == pre - skin_price
 
-    # Try another skin priced at 200 soft → 422
+    # Drain remaining soft so the next skin definitely 422s.
+    leftover = user.get_wallet().json()["soft"]
+    if leftover > 0:
+        user.spend("soft", leftover)
     skin2 = admin_make_skin(admin, char["id"], cost=200, currency="soft")
     assert user.purchase_skin(skin2["id"]).status_code == 422
 
-    # Buy bundle again → soft refilled.
+    # Buy bundle again → +200 soft. Top up with admin grant to cover
+    # skin2's quote, then assert exact wallet delta.
     user.purchase_store_item(bundle["id"])
     assert user.get_wallet().json()["soft"] == 200
+    skin2_price = quote_price(user, "skin", skin2["id"])
+    if skin2_price > 200:
+        admin.admin_grant(uid, "soft", skin2_price - 200)
+    pre2 = user.get_wallet().json()["soft"]
     assert user.purchase_skin(skin2["id"]).status_code == 200
+    assert user.get_wallet().json()["soft"] == pre2 - skin2_price
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -579,7 +604,9 @@ def test_full_highscore_and_leaderboard_ordering(admin, user_factory):
     b.submit_run(score=300, distance=0, coins_collected=0, duration_ms=1)
     c.submit_run(score=200, distance=0, coins_collected=0, duration_ms=1)
 
-    rows = a.leaderboard().json()
+    # Bump the leaderboard limit so we're not racing against unrelated
+    # users from prior test runs polluting the default top-50 slice.
+    rows = a.leaderboard(limit=500).json()
     score_map = {r["user_id"]: r["main_highscore"] for r in rows}
     a_id = a.get_profile().json()["user_id"]
     b_id = b.get_profile().json()["user_id"]
@@ -690,24 +717,32 @@ def test_full_iap_payment_credit_spend_flow(admin, user):
     assert approved.status_code == 200
     assert user.get_wallet().json()["soft"] == 500
 
-    # Buy first skin → 200 left.
+    # Buy first skin at the per-user dynamic price.
+    price_a = quote_price(user, "skin", s_a["id"])
     assert user.purchase_skin(s_a["id"]).status_code == 200
-    assert user.get_wallet().json()["soft"] == 200
+    assert user.get_wallet().json()["soft"] == 500 - price_a
 
-    # Second skin → 422.
+    # Second skin's dynamic price probably exceeds remaining funds,
+    # but the sine wobble could swing either way at level 0. Force the
+    # fail path by spending soft down to 0 first.
+    leftover = user.get_wallet().json()["soft"]
+    if leftover > 0:
+        user.spend("soft", leftover)
+    assert user.get_wallet().json()["soft"] == 0
     assert user.purchase_skin(s_b["id"]).status_code == 422
 
-    # Top up via second IAP charge → 700.
+    # Top up via second IAP charge → +500 soft.
     user.charge_payment(
         item_id=item["id"],
         customer_information=_customer(),
         card_data=_card("4111111111111111"),
     )
-    assert user.get_wallet().json()["soft"] == 700
+    assert user.get_wallet().json()["soft"] == 500
 
-    # Buy second skin → 400.
+    # Buy second skin at its own dynamic price.
+    price_b = quote_price(user, "skin", s_b["id"])
     assert user.purchase_skin(s_b["id"]).status_code == 200
-    assert user.get_wallet().json()["soft"] == 400
+    assert user.get_wallet().json()["soft"] == 500 - price_b
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -722,11 +757,12 @@ def test_full_double_purchase_does_not_double_charge(admin, user):
     skin = admin_make_skin(admin, char["id"], cost=100, currency="soft")
     uid = user.get_profile().json()["user_id"]
     admin.admin_grant(uid, "soft", 200)
+    expected = quote_price(user, "skin", skin["id"])
 
     assert user.purchase_skin(skin["id"]).status_code == 200
-    assert user.get_wallet().json()["soft"] == 100
+    assert user.get_wallet().json()["soft"] == 200 - expected
     assert user.purchase_skin(skin["id"]).status_code == 409
-    assert user.get_wallet().json()["soft"] == 100
+    assert user.get_wallet().json()["soft"] == 200 - expected
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -860,7 +896,9 @@ def test_full_energy_regen_then_spend_in_purchase(admin, user):
     assert body["energy"] == 35
     assert body["energy_refill_started_at"] is not None
 
-    # Energy-priced store item: cost 10 energy.
+    # Energy-priced store item: cost 10 energy. Dynamic pricing wobbles
+    # the charge inside [9, 12] (base=10, ±15% then rounded). Quote
+    # before charging so the post-purchase balance assertion holds.
     item = admin.admin_create_store_item(
         name=rand_item_name("EnergySink"),
         item_type="custom",
@@ -868,9 +906,10 @@ def test_full_energy_regen_then_spend_in_purchase(admin, user):
         cost=10,
         payload=[{"type": "currency", "currency": "soft", "amount": 1}],
     ).json()
+    energy_price = quote_price(user, "store", item["id"])
     assert user.purchase_store_item(item["id"]).status_code == 200
     body = user.get_wallet().json()
-    assert body["energy"] == 25
+    assert body["energy"] == 35 - energy_price
     # Clock kept ticking (still < cap), anchor still set.
     assert body["energy_refill_started_at"] is not None
 

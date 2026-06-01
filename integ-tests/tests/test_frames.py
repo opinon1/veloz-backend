@@ -9,6 +9,7 @@ import pytest
 
 from helpers.factory import (
     admin_make_frame,
+    quote_price,
     rand_frame_name,
 )
 
@@ -101,7 +102,7 @@ def test_select_reflects_in_profile_and_leaderboard(admin, user):
     assert profile["frame_url"] == f["id"]
 
     user.submit_run(score=42, distance=0, coins_collected=0, duration_ms=1)
-    rows = user.leaderboard().json()
+    rows = user.leaderboard(limit=500).json()
     me = next(r for r in rows if r["user_id"] == profile["user_id"])
     assert me["frame_url"] == f["id"]
 
@@ -142,10 +143,11 @@ def test_purchase_insufficient_funds(user, admin):
 def test_purchase_deducts_currency(user, admin):
     f = admin_make_frame(admin, price=50, currency="soft")
     admin.admin_grant(user.get_profile().json()["user_id"], "soft", 200)
+    expected = quote_price(user, "frame", f["id"])
     body = user.purchase_frame(f["id"]).json()
     assert body["frame_id"] == f["id"]
-    assert body["cost_paid"] == 50
-    assert body["new_balance"] == 150
+    assert body["cost_paid"] == expected
+    assert body["new_balance"] == 200 - expected
 
 
 def test_double_purchase_rejected(user, admin):
