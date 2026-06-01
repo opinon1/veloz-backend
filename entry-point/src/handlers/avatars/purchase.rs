@@ -4,6 +4,7 @@ use uuid::Uuid;
 use crate::state::AppState;
 use crate::extractors::Claims;
 use crate::handlers::wallet::utils::adjust_balance;
+use crate::pricing::apply_dynamic_price;
 
 #[derive(Serialize)]
 pub struct PurchaseAvatarResponse {
@@ -48,12 +49,27 @@ pub async fn purchase_avatar(
         return Err(StatusCode::CONFLICT);
     }
 
-    let new_balance = if cost > 0 {
+    let (total_xp, account_multiplier): (i64, f64) = sqlx::query_as(
+        "SELECT total_xp, price_multiplier FROM profiles WHERE user_id = $1",
+    )
+    .bind(session.user_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let adjusted_cost = apply_dynamic_price(
+        cost,
+        session.user_id,
+        avatar_id,
+        total_xp,
+        account_multiplier,
+    );
+
+    let new_balance = if adjusted_cost > 0 {
         adjust_balance(
             &mut tx,
             session.user_id,
             &currency,
-            -cost,
+            -adjusted_cost,
             "avatar_purchase",
             Some(&avatar_id.to_string()),
         )
@@ -73,7 +89,7 @@ pub async fn purchase_avatar(
     Ok(Json(PurchaseAvatarResponse {
         avatar_id,
         currency,
-        cost_paid: cost,
+        cost_paid: adjusted_cost,
         new_balance,
     }))
 }

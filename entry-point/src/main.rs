@@ -3,6 +3,7 @@ mod handlers;
 mod leveling;
 mod middleware;
 mod models;
+mod pricing;
 mod services;
 mod state;
 
@@ -127,6 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/payments", handlers::payments::router::router())
         .nest("/missions", handlers::missions::router::router())
         .nest("/me/metadata", handlers::metadata::router::router())
+        .nest("/me/prices", handlers::pricing::router::router())
         .nest("/admin", handlers::admin::router::router())
         // Permissive CORS: any origin, any method, any header. Auth tokens
         // travel as Bearer in the Authorization header (not cookies), so the

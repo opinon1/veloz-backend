@@ -10,6 +10,7 @@ use crate::handlers::grants_util::apply_grant;
 use crate::handlers::missions::service::{MissionEvent, record_event};
 use crate::handlers::wallet::utils::adjust_balance;
 use crate::models::store_types::{Grant, StoreCurrency, validate_grants};
+use crate::pricing::apply_dynamic_price;
 use crate::state::AppState;
 use axum::{
     Json,
@@ -65,21 +66,24 @@ pub async fn purchase_item(
     // tampered with after creation.
     let grants = validate_grants(&payload).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Apply per-user price multiplier. Defense-in-depth clamp at >= 0 in case
-    // a negative multiplier slipped past the admin-side guard.
-    let multiplier: (f64,) =
-        sqlx::query_as("SELECT price_multiplier FROM profiles WHERE user_id = $1")
-            .bind(session.user_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let raw_cost = (cost as f64) * multiplier.0;
-    let adjusted_cost = if raw_cost.is_finite() {
-        raw_cost.round().max(0.0) as i64
-    } else {
-        0
-    };
+    // Dynamic per-(user, item) price stacked on top of the admin's
+    // flat `profiles.price_multiplier` discount. See `crate::pricing`
+    // for the linear-plus-sine formula. At total_xp = 0 the dynamic
+    // factor collapses to 1.0, so a fresh user still pays exact base.
+    let (total_xp, account_multiplier): (i64, f64) = sqlx::query_as(
+        "SELECT total_xp, price_multiplier FROM profiles WHERE user_id = $1",
+    )
+    .bind(session.user_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let adjusted_cost = apply_dynamic_price(
+        cost,
+        session.user_id,
+        item_id,
+        total_xp,
+        account_multiplier,
+    );
 
     let new_balance = if adjusted_cost > 0 {
         adjust_balance(

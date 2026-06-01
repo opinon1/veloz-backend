@@ -353,6 +353,10 @@ class AuthedClient:
             f"/admin/users/{user_id}/profile", self.access_token, json=fields
         )
 
+    # ── Pricing ──
+    def list_my_prices(self) -> httpx.Response:
+        return self._c.raw_get("/me/prices", self.access_token)
+
     # ── Metadata ──
     def get_metadata(self) -> httpx.Response:
         return self._c.raw_get("/me/metadata", self.access_token)

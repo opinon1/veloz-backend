@@ -4,6 +4,7 @@ use uuid::Uuid;
 use crate::state::AppState;
 use crate::extractors::Claims;
 use crate::handlers::wallet::utils::adjust_balance;
+use crate::pricing::apply_dynamic_price;
 
 #[derive(Serialize)]
 pub struct PurchaseSkinResponse {
@@ -51,19 +52,35 @@ pub async fn purchase_skin(
         return Err(StatusCode::CONFLICT);
     }
 
-    let new_balance = if cost > 0 {
+    // Per-user dynamic price: (base_cost · sine_linear_curve · profile_multiplier)
+    let (total_xp, account_multiplier): (i64, f64) = sqlx::query_as(
+        "SELECT total_xp, price_multiplier FROM profiles WHERE user_id = $1",
+    )
+    .bind(session.user_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let adjusted_cost = apply_dynamic_price(
+        cost,
+        session.user_id,
+        skin_id,
+        total_xp,
+        account_multiplier,
+    );
+
+    let new_balance = if adjusted_cost > 0 {
         adjust_balance(
             &mut tx,
             session.user_id,
             &currency,
-            -cost,
+            -adjusted_cost,
             "skin_purchase",
             Some(&skin_id.to_string()),
         )
         .await?
     } else {
-        // Free skin — no ledger entry. Still return actual current balance
-        // so clients display accurate UI.
+        // Free skin (base or after dynamic discount). No ledger entry;
+        // return the actual balance for accurate UI.
         let q = format!("SELECT {col} FROM wallets WHERE user_id = $1", col = currency);
         let (bal,): (i64,) = sqlx::query_as(&q)
             .bind(session.user_id)
@@ -78,7 +95,7 @@ pub async fn purchase_skin(
     Ok(Json(PurchaseSkinResponse {
         skin_id,
         currency,
-        cost_paid: cost,
+        cost_paid: adjusted_cost,
         new_balance,
     }))
 }

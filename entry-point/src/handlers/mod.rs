@@ -8,6 +8,7 @@ pub mod grants_util;
 pub mod metadata;
 pub mod missions;
 pub mod payments;
+pub mod pricing;
 pub mod prize_wheel;
 pub mod profile;
 pub mod runs;
