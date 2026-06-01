@@ -5,15 +5,20 @@
 //! `currency = "iap"` items don't go through this endpoint — they require
 //! receipt validation and are fulfilled by `/wallet/iap/purchase`.
 
-use axum::{extract::{Path, State}, Json, http::StatusCode};
+use crate::extractors::Claims;
+use crate::handlers::grants_util::apply_grant;
+use crate::handlers::missions::service::{MissionEvent, record_event};
+use crate::handlers::wallet::utils::adjust_balance;
+use crate::models::store_types::{Grant, StoreCurrency, validate_grants};
+use crate::state::AppState;
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
 use serde::Serialize;
 use std::str::FromStr;
 use uuid::Uuid;
-use crate::state::AppState;
-use crate::extractors::Claims;
-use crate::handlers::grants_util::apply_grant;
-use crate::handlers::wallet::utils::adjust_balance;
-use crate::models::store_types::{StoreCurrency, validate_grants};
 
 #[derive(Serialize)]
 pub struct PurchaseItemResponse {
@@ -29,25 +34,31 @@ pub async fn purchase_item(
     Claims(session): Claims,
     Path(item_id): Path<Uuid>,
 ) -> Result<Json<PurchaseItemResponse>, StatusCode> {
-    let mut tx = state.db.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut tx = state
+        .db
+        .begin()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let item: Option<(i64, String, serde_json::Value, bool)> = sqlx::query_as(
-        "SELECT cost, currency, payload, is_active FROM store_items WHERE id = $1",
+    let item: Option<(i64, String, serde_json::Value, bool, String)> = sqlx::query_as(
+        "SELECT cost, currency, payload, is_active, item_type FROM store_items WHERE id = $1",
     )
     .bind(item_id)
     .fetch_optional(&mut *tx)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let (cost, currency_str, payload, is_active) = item.ok_or(StatusCode::NOT_FOUND)?;
+    let (cost, currency_str, payload, is_active, item_type) = item.ok_or(StatusCode::NOT_FOUND)?;
     if !is_active {
         return Err(StatusCode::GONE);
     }
 
-    let currency = StoreCurrency::from_str(&currency_str)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let currency =
+        StoreCurrency::from_str(&currency_str).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     // IAP-priced items must go through /wallet/iap/purchase, not this endpoint.
-    let wallet_currency = currency.as_wallet_currency().ok_or(StatusCode::BAD_REQUEST)?;
+    let wallet_currency = currency
+        .as_wallet_currency()
+        .ok_or(StatusCode::BAD_REQUEST)?;
 
     // Parse the persisted payload into a Vec<Grant>. Admin-time validation
     // already guaranteed this — fall through to 500 only if the row was
@@ -56,13 +67,12 @@ pub async fn purchase_item(
 
     // Apply per-user price multiplier. Defense-in-depth clamp at >= 0 in case
     // a negative multiplier slipped past the admin-side guard.
-    let multiplier: (f64,) = sqlx::query_as(
-        "SELECT price_multiplier FROM profiles WHERE user_id = $1",
-    )
-    .bind(session.user_id)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let multiplier: (f64,) =
+        sqlx::query_as("SELECT price_multiplier FROM profiles WHERE user_id = $1")
+            .bind(session.user_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let raw_cost = (cost as f64) * multiplier.0;
     let adjusted_cost = if raw_cost.is_finite() {
@@ -113,7 +123,34 @@ pub async fn purchase_item(
         apply_grant(&mut tx, session.user_id, g, "store_grant", item_id).await?;
     }
 
-    tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Mission hooks: one StorePurchase event, plus a CurrencyCollected
+    // event for each currency grant in the payload (matches how runs
+    // credit the wallet directly).
+    record_event(
+        &mut tx,
+        session.user_id,
+        MissionEvent::StorePurchase {
+            item_type: item_type.clone(),
+        },
+    )
+    .await?;
+    for g in &grants {
+        if let Grant::Currency { currency, amount } = g {
+            record_event(
+                &mut tx,
+                session.user_id,
+                MissionEvent::CurrencyCollected {
+                    currency: currency.as_str().to_string(),
+                    amount: *amount,
+                },
+            )
+            .await?;
+        }
+    }
+
+    tx.commit()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(PurchaseItemResponse {
         item_id,
@@ -123,4 +160,3 @@ pub async fn purchase_item(
         payload,
     }))
 }
-

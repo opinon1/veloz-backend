@@ -1,0 +1,15 @@
+meta {
+  name: Get Metadata Key
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{base_url}}/me/metadata/theme
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}

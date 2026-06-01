@@ -28,6 +28,8 @@ def test_admin_character_crud_roundtrip(admin):
     assert created["name"] == name
     assert created["is_active"] is True
     assert created["default_unlocked"] is False
+    # Default rarity is `common` when not specified.
+    assert created["rarity"] == "common"
 
     upd = admin.admin_update_character(cid, default_unlocked=True, is_active=False).json()
     assert upd["default_unlocked"] is True
@@ -35,6 +37,30 @@ def test_admin_character_crud_roundtrip(admin):
 
     assert admin.admin_delete_character(cid).status_code == 204
     assert admin.admin_update_character(cid, name="x").status_code == 404
+
+
+@pytest.mark.admin
+@pytest.mark.parametrize("rarity", ["common", "uncommon", "rare", "epic", "legendary"])
+def test_admin_create_character_with_rarity(admin, rarity):
+    char = admin.admin_create_character(name=rand_character_name(), rarity=rarity).json()
+    assert char["rarity"] == rarity
+
+
+@pytest.mark.admin
+def test_admin_update_character_rarity(admin, user):
+    char = admin.admin_create_character(name=rand_character_name(), rarity="common").json()
+    upd = admin.admin_update_character(char["id"], rarity="legendary").json()
+    assert upd["rarity"] == "legendary"
+    # User-facing list exposes rarity too.
+    rows = user.list_characters().json()
+    row = next(c for c in rows if c["id"] == char["id"])
+    assert row["rarity"] == "legendary"
+
+
+@pytest.mark.admin
+def test_admin_rejects_bad_rarity(admin):
+    r = admin.admin_create_character(name=rand_character_name(), rarity="mythic")
+    assert r.status_code == 400
 
 
 @pytest.mark.admin

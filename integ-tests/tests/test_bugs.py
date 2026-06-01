@@ -504,7 +504,8 @@ def test_delete_account_cascades_runs_wallet_profile_skins(api, admin, creds):
     assert profile["main_highscore"] == 0
     assert profile["total_xp"] == 0
     assert me2.owned_skins().json() == []
-    assert me2.get_wallet().json() == {"high": 0, "soft": 0, "energy": 0}
+    w = me2.get_wallet().json()
+    assert (w["high"], w["soft"], w["energy"]) == (0, 0, 0)
 
 
 def test_concurrent_run_submits_accumulate_xp_correctly(base_url, user):

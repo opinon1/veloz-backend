@@ -1,0 +1,21 @@
+meta {
+  name: Put Metadata Key
+  type: http
+  seq: 5
+}
+
+put {
+  url: {{base_url}}/me/metadata/theme
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "value": "light"
+  }
+}

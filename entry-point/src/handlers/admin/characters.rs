@@ -1,8 +1,14 @@
-use axum::{extract::{Path, State}, Json, http::StatusCode};
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-use crate::state::AppState;
 use crate::extractors::AdminClaims;
+use crate::models::rarity::Rarity;
+use crate::state::AppState;
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
+use serde::{Deserialize, Serialize};
+use std::str::FromStr;
+use uuid::Uuid;
 
 #[derive(Deserialize)]
 pub struct CreateCharacterRequest {
@@ -15,10 +21,17 @@ pub struct CreateCharacterRequest {
     /// default.
     #[serde(default = "empty_object")]
     pub metadata: serde_json::Value,
+    /// One of: common, uncommon, rare, epic, legendary. Default common.
+    #[serde(default = "default_rarity")]
+    pub rarity: String,
 }
 
 fn empty_object() -> serde_json::Value {
     serde_json::Value::Object(Default::default())
+}
+
+fn default_rarity() -> String {
+    "common".to_string()
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -28,6 +41,7 @@ pub struct CharacterRow {
     pub is_active: bool,
     pub default_unlocked: bool,
     pub metadata: serde_json::Value,
+    pub rarity: String,
 }
 
 pub async fn create_character(
@@ -38,17 +52,19 @@ pub async fn create_character(
     if payload.name.trim().is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
+    let rarity = Rarity::from_str(&payload.rarity).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let row = sqlx::query_as::<_, CharacterRow>(
         r#"
-        INSERT INTO characters (name, default_unlocked, metadata)
-        VALUES ($1, $2, $3)
-        RETURNING id, name, is_active, default_unlocked, metadata
+        INSERT INTO characters (name, default_unlocked, metadata, rarity)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, name, is_active, default_unlocked, metadata, rarity
         "#,
     )
     .bind(&payload.name)
     .bind(payload.default_unlocked)
     .bind(&payload.metadata)
+    .bind(rarity.as_str())
     .fetch_one(&state.db)
     .await
     .map_err(|e| match e {
@@ -64,7 +80,7 @@ pub async fn list_all_characters(
     AdminClaims(_): AdminClaims,
 ) -> Result<Json<Vec<CharacterRow>>, StatusCode> {
     let rows = sqlx::query_as::<_, CharacterRow>(
-        "SELECT id, name, is_active, default_unlocked, metadata FROM characters ORDER BY created_at DESC",
+        "SELECT id, name, is_active, default_unlocked, metadata, rarity FROM characters ORDER BY created_at DESC",
     )
     .fetch_all(&state.db)
     .await
@@ -79,6 +95,7 @@ pub struct UpdateCharacterRequest {
     pub is_active: Option<bool>,
     pub default_unlocked: Option<bool>,
     pub metadata: Option<serde_json::Value>,
+    pub rarity: Option<String>,
 }
 
 pub async fn update_character(
@@ -92,6 +109,15 @@ pub async fn update_character(
             return Err(StatusCode::BAD_REQUEST);
         }
     }
+    let rarity_str = match payload.rarity.as_deref() {
+        Some(r) => Some(
+            Rarity::from_str(r)
+                .map_err(|_| StatusCode::BAD_REQUEST)?
+                .as_str()
+                .to_string(),
+        ),
+        None => None,
+    };
 
     let row = sqlx::query_as::<_, CharacterRow>(
         r#"
@@ -100,9 +126,10 @@ pub async fn update_character(
             is_active        = COALESCE($3, is_active),
             default_unlocked = COALESCE($4, default_unlocked),
             metadata         = COALESCE($5, metadata),
+            rarity           = COALESCE($6, rarity),
             updated_at       = CURRENT_TIMESTAMP
         WHERE id = $1
-        RETURNING id, name, is_active, default_unlocked, metadata
+        RETURNING id, name, is_active, default_unlocked, metadata, rarity
         "#,
     )
     .bind(id)
@@ -110,6 +137,7 @@ pub async fn update_character(
     .bind(payload.is_active)
     .bind(payload.default_unlocked)
     .bind(&payload.metadata)
+    .bind(&rarity_str)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| match e {

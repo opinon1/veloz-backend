@@ -1,0 +1,22 @@
+meta {
+  name: Update Mission
+  type: http
+  seq: 3
+}
+
+patch {
+  url: {{base_url}}/admin/missions/{{mission_id}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "xp_reward": 1000,
+    "is_active": true
+  }
+}

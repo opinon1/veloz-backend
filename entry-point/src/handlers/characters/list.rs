@@ -1,8 +1,8 @@
-use axum::{extract::State, Json, http::StatusCode};
+use crate::extractors::Claims;
+use crate::state::AppState;
+use axum::{Json, extract::State, http::StatusCode};
 use serde::Serialize;
 use uuid::Uuid;
-use crate::state::AppState;
-use crate::extractors::Claims;
 
 #[derive(Serialize)]
 pub struct CharacterView {
@@ -12,6 +12,8 @@ pub struct CharacterView {
     pub related_skins: Vec<Uuid>,
     /// Free-form frontend metadata set by admin on the character row.
     pub metadata: serde_json::Value,
+    /// One of: common, uncommon, rare, epic, legendary.
+    pub rarity: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -21,6 +23,7 @@ struct Row {
     equipped_skin_id: Option<Uuid>,
     default_unlocked: bool,
     metadata: serde_json::Value,
+    rarity: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -49,7 +52,8 @@ pub async fn list_characters(
             uc.unlocked,
             uc.equipped_skin_id,
             c.default_unlocked,
-            c.metadata
+            c.metadata,
+            c.rarity
         FROM characters c
         LEFT JOIN user_characters uc
             ON uc.character_id = c.id AND uc.user_id = $1
@@ -73,8 +77,7 @@ pub async fn list_characters(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let mut by_char: std::collections::HashMap<Uuid, Vec<Uuid>> =
-        std::collections::HashMap::new();
+    let mut by_char: std::collections::HashMap<Uuid, Vec<Uuid>> = std::collections::HashMap::new();
     for s in skins {
         by_char.entry(s.character_id).or_default().push(s.id);
     }
@@ -87,6 +90,7 @@ pub async fn list_characters(
             equipped_skin: c.equipped_skin_id,
             related_skins: by_char.remove(&c.id).unwrap_or_default(),
             metadata: c.metadata,
+            rarity: c.rarity,
         })
         .collect();
 

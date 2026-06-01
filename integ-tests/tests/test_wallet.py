@@ -5,11 +5,19 @@ import pytest
 
 
 def test_wallet_defaults_zero(user):
-    """All three currencies start at 0 for a new user (per spec)."""
+    """All three currencies start at 0 for a new user (per spec).
+
+    The wallet response also exposes `energy_refill_started_at` — the
+    moment the next energy tick lands. With energy=0 < cap, the regen
+    clock is running (set on first read), so the field is non-null.
+    """
     r = user.get_wallet()
     assert r.status_code == 200
     body = r.json()
-    assert body == {"high": 0, "soft": 0, "energy": 0}
+    assert body["high"] == 0
+    assert body["soft"] == 0
+    assert body["energy"] == 0
+    assert body["energy_refill_started_at"] is not None
 
 
 def test_spend_with_zero_balance_fails(user):

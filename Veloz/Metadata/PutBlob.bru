@@ -1,0 +1,23 @@
+meta {
+  name: Put Metadata Blob
+  type: http
+  seq: 2
+}
+
+put {
+  url: {{base_url}}/me/metadata
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "theme": "dark",
+    "tutorial_seen": true,
+    "audio_pref": { "music": 0.6, "sfx": 1.0 }
+  }
+}

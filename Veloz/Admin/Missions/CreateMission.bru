@@ -1,0 +1,33 @@
+meta {
+  name: Create Mission
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{base_url}}/admin/missions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "name": "Run 10 times daily",
+    "description": "Play 10 matches today",
+    "cycle": "daily",
+    "trigger_event": "run_completed",
+    "target": { "amount": 10 },
+    "xp_reward": 500,
+    "is_active": true
+  }
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setEnvVar("mission_id", res.body.id);
+  }
+}

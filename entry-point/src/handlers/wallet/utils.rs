@@ -57,6 +57,13 @@ pub async fn adjust_balance(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    // Energy regen clock: post-mutation state determines whether the
+    // refill timer should be running. Spending energy below 50 starts
+    // the clock; buying refills past 50 pauses it.
+    if currency == "energy" {
+        super::energy::reconcile_clock_for_energy(tx, user_id).await?;
+    }
+
     Ok(new_balance.0)
 }
 
@@ -69,8 +76,14 @@ pub async fn adjust_balance_oneshot(
     reason: &str,
     reference_id: Option<&str>,
 ) -> Result<i64, StatusCode> {
-    let mut tx = pool.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let new_balance = adjust_balance(&mut tx, user_id, currency, delta, reason, reference_id).await?;
-    tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let new_balance =
+        adjust_balance(&mut tx, user_id, currency, delta, reason, reference_id).await?;
+    tx.commit()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(new_balance)
 }

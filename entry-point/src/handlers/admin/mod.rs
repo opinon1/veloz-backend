@@ -1,9 +1,10 @@
+mod avatars;
+mod battlepass;
+mod characters;
+mod frames;
+mod missions;
+mod prize_wheel;
 pub mod router;
 mod skins;
-mod characters;
-mod avatars;
-mod frames;
 mod store;
-mod battlepass;
 mod users;
-mod prize_wheel;

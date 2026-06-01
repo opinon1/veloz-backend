@@ -353,6 +353,47 @@ class AuthedClient:
             f"/admin/users/{user_id}/profile", self.access_token, json=fields
         )
 
+    # ── Metadata ──
+    def get_metadata(self) -> httpx.Response:
+        return self._c.raw_get("/me/metadata", self.access_token)
+
+    def put_metadata(self, blob: dict[str, Any]) -> httpx.Response:
+        return self._c.raw_put("/me/metadata", self.access_token, json=blob)
+
+    def delete_metadata(self) -> httpx.Response:
+        return self._c.raw_delete("/me/metadata", self.access_token)
+
+    def get_metadata_key(self, key: str) -> httpx.Response:
+        return self._c.raw_get(f"/me/metadata/{key}", self.access_token)
+
+    def put_metadata_key(self, key: str, value: Any) -> httpx.Response:
+        return self._c.raw_put(
+            f"/me/metadata/{key}", self.access_token, json={"value": value}
+        )
+
+    def delete_metadata_key(self, key: str) -> httpx.Response:
+        return self._c.raw_delete(f"/me/metadata/{key}", self.access_token)
+
+    # ── Missions ──
+    def list_missions(self) -> httpx.Response:
+        return self._c.raw_get("/missions", self.access_token)
+
+    def admin_create_mission(self, **fields: Any) -> httpx.Response:
+        return self._c.raw_post("/admin/missions", self.access_token, json=fields)
+
+    def admin_list_missions(self) -> httpx.Response:
+        return self._c.raw_get("/admin/missions", self.access_token)
+
+    def admin_update_mission(self, mission_id: str, **fields: Any) -> httpx.Response:
+        return self._c.raw_patch(
+            f"/admin/missions/{mission_id}", self.access_token, json=fields
+        )
+
+    def admin_delete_mission(self, mission_id: str) -> httpx.Response:
+        return self._c.raw_delete(
+            f"/admin/missions/{mission_id}", self.access_token
+        )
+
     # ── Auth continued ──
     def verify(self) -> httpx.Response:
         return self._c.raw_get("/auth/verify", self.access_token)

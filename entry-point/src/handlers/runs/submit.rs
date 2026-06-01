@@ -1,11 +1,12 @@
-use axum::{extract::State, Json, http::StatusCode};
+use crate::extractors::Claims;
+use crate::handlers::battlepass::utils::active_season;
+use crate::handlers::missions::service::{MissionEvent, record_event};
+use crate::handlers::wallet::utils::adjust_balance;
+use crate::leveling::{bp_xp_from_run, level_from_total_xp, xp_from_run};
+use crate::state::AppState;
+use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use crate::state::AppState;
-use crate::extractors::Claims;
-use crate::leveling::{xp_from_run, bp_xp_from_run, level_from_total_xp};
-use crate::handlers::wallet::utils::adjust_balance;
-use crate::handlers::battlepass::utils::active_season;
 
 #[derive(Deserialize)]
 pub struct SubmitRunRequest {
@@ -34,14 +35,22 @@ pub async fn submit_run(
     Claims(session): Claims,
     Json(payload): Json<SubmitRunRequest>,
 ) -> Result<Json<SubmitRunResponse>, StatusCode> {
-    if payload.score < 0 || payload.distance < 0 || payload.coins_collected < 0 || payload.duration_ms < 0 {
+    if payload.score < 0
+        || payload.distance < 0
+        || payload.coins_collected < 0
+        || payload.duration_ms < 0
+    {
         return Err(StatusCode::BAD_REQUEST);
     }
 
     let xp_awarded = xp_from_run(payload.score);
     let bp_xp_awarded = bp_xp_from_run(payload.score);
 
-    let mut tx = state.db.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut tx = state
+        .db
+        .begin()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Insert run record.
     let run_id: (Uuid,) = sqlx::query_as(
@@ -143,7 +152,27 @@ pub async fn submit_run(
         None
     };
 
-    tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Mission hooks: one RunCompleted per submit, plus a
+    // CurrencyCollected event for soft if any coins were awarded. Both
+    // run inside the same tx so a rollback below would also roll back
+    // the mission credit. (Currently nothing rolls back after this
+    // point, but keeping it in-tx is the right shape.)
+    record_event(&mut tx, session.user_id, MissionEvent::RunCompleted).await?;
+    if payload.coins_collected > 0 {
+        record_event(
+            &mut tx,
+            session.user_id,
+            MissionEvent::CurrencyCollected {
+                currency: "soft".to_string(),
+                amount: payload.coins_collected,
+            },
+        )
+        .await?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(SubmitRunResponse {
         run_id: run_id.0,

@@ -1,0 +1,15 @@
+meta {
+  name: Delete Metadata Key
+  type: http
+  seq: 6
+}
+
+delete {
+  url: {{base_url}}/me/metadata/theme
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}

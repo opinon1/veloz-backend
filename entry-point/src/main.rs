@@ -1,12 +1,12 @@
-mod handlers;
-mod middleware;
-mod state;
 mod extractors;
+mod handlers;
+mod leveling;
+mod middleware;
 mod models;
 mod services;
-mod leveling;
+mod state;
 
-use axum::{routing::get, Router};
+use axum::{Router, routing::get};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use state::AppState;
 use tower_http::cors::{Any, CorsLayer};
@@ -30,26 +30,38 @@ fn url_encode(s: &str) -> String {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "veloz=debug,tower_http=debug".into()))
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "veloz=debug,tower_http=debug".into()),
+        )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
     let db_opts = PgConnectOptions::new()
         .host(&std::env::var("DB_HOST").expect("DB_HOST missing"))
-        .port(std::env::var("DB_PORT").expect("DB_PORT missing").parse().expect("DB_PORT must be a number"))
+        .port(
+            std::env::var("DB_PORT")
+                .expect("DB_PORT missing")
+                .parse()
+                .expect("DB_PORT must be a number"),
+        )
         .username(&std::env::var("DB_USER").expect("DB_USER missing"))
         .password(&std::env::var("DB_PASSWORD").expect("DB_PASSWORD missing"))
         .database(&std::env::var("DB_NAME").expect("DB_NAME missing"));
 
     let redis_host = std::env::var("REDIS_HOST").expect("REDIS_HOST missing");
     let redis_port = std::env::var("REDIS_PORT").expect("REDIS_PORT missing");
-    let redis_password = url_encode(&std::env::var("REDIS_PASSWORD").expect("REDIS_PASSWORD missing"));
+    let redis_password =
+        url_encode(&std::env::var("REDIS_PASSWORD").expect("REDIS_PASSWORD missing"));
     let redis_scheme = if std::env::var("REDIS_TLS").as_deref() == Ok("true") {
         "rediss"
     } else {
         "redis"
     };
-    let redis_url = format!("{}://:{}@{}:{}", redis_scheme, redis_password, redis_host, redis_port);
+    let redis_url = format!(
+        "{}://:{}@{}:{}",
+        redis_scheme, redis_password, redis_host, redis_port
+    );
 
     tracing::info!("Connecting to Postgres...");
     let pool = PgPoolOptions::new().connect_with(db_opts).await?;
@@ -113,6 +125,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/runs", handlers::runs::router::router())
         .nest("/prize-wheel", handlers::prize_wheel::router::router())
         .nest("/payments", handlers::payments::router::router())
+        .nest("/missions", handlers::missions::router::router())
+        .nest("/me/metadata", handlers::metadata::router::router())
         .nest("/admin", handlers::admin::router::router())
         // Permissive CORS: any origin, any method, any header. Auth tokens
         // travel as Bearer in the Authorization header (not cookies), so the
@@ -131,8 +145,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("0.0.0.0:{}", port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("Listening on {}", addr);
-    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }

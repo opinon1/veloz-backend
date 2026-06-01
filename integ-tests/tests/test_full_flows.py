@@ -419,7 +419,8 @@ def test_full_account_deletion_cascades(api, admin):
     p = fresh.get_profile().json()
     assert p["main_highscore"] == 0
     assert p["account_level"] == 1
-    assert fresh.get_wallet().json() == {"high": 0, "soft": 0, "energy": 0}
+    w = fresh.get_wallet().json()
+    assert (w["high"], w["soft"], w["energy"]) == (0, 0, 0)
     assert fresh.owned_skins().json() == []
 
 
