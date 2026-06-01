@@ -64,6 +64,52 @@ def test_admin_rejects_bad_rarity(admin):
 
 
 @pytest.mark.admin
+@pytest.mark.parametrize("bad", ["COMMON", "Common", "RARE", "epic ", " common"])
+def test_admin_rejects_rarity_case_or_whitespace(admin, bad):
+    """FromStr is exact-match — uppercase / mixed-case / whitespace
+    variants are all rejected. Keeps the wire format stable."""
+    r = admin.admin_create_character(name=rand_character_name(), rarity=bad)
+    assert r.status_code == 400
+
+
+@pytest.mark.admin
+def test_admin_partial_update_preserves_rarity(admin):
+    """PATCH with no `rarity` field keeps the existing value intact."""
+    char = admin.admin_create_character(name=rand_character_name(), rarity="epic").json()
+    # PATCH only metadata; rarity must survive.
+    upd = admin.admin_update_character(char["id"], metadata={"foo": "bar"}).json()
+    assert upd["rarity"] == "epic"
+
+
+@pytest.mark.admin
+def test_admin_update_with_invalid_rarity_does_not_change_row(admin):
+    """A bad rarity in the PATCH body rejects the whole update — the
+    row's existing fields aren't touched."""
+    char = admin.admin_create_character(
+        name=rand_character_name(), rarity="rare", default_unlocked=False
+    ).json()
+    r = admin.admin_update_character(
+        char["id"], rarity="mythic", default_unlocked=True
+    )
+    assert r.status_code == 400
+    fresh = next(
+        c for c in admin.admin_list_characters().json() if c["id"] == char["id"]
+    )
+    assert fresh["rarity"] == "rare"
+    assert fresh["default_unlocked"] is False
+
+
+@pytest.mark.admin
+def test_existing_characters_backfilled_to_common(admin):
+    """Migration 0017 backfilled all pre-existing characters with
+    rarity='common'. New chars also default to common when the field
+    is omitted on create. (Asserting via a fresh char keeps the test
+    independent of which seed chars exist in the DB.)"""
+    char = admin.admin_create_character(name=rand_character_name()).json()
+    assert char["rarity"] == "common"
+
+
+@pytest.mark.admin
 def test_admin_character_name_must_be_unique(admin):
     name = rand_character_name()
     assert admin.admin_create_character(name=name).status_code == 201

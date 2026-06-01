@@ -748,3 +748,153 @@ def test_full_authorization_header_strictness(api, user):
     assert base.get("/auth/verify", headers={"Authorization": tok}).status_code == 401
     # No header → 401.
     assert base.get("/auth/verify").status_code == 401
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 18. New-feature E2E: metadata + missions + energy regen + rarity
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_full_metadata_persistence_across_signin(api, creds):
+    """User stuffs metadata, signs out, signs back in — blob is still
+    there. Per-key writes round-trip too."""
+    from helpers.api import AuthedClient
+
+    api.signup(creds.username, creds.email, creds.password)
+    body = api.signin(creds.email, creds.password).json()
+    me = AuthedClient(api, body["access_token"], body["refresh_token"])
+
+    me.put_metadata({"theme": "dark", "lang": "es"})
+    me.put_metadata_key("tutorial_seen", True)
+    me.signout()
+
+    body2 = api.signin(creds.email, creds.password).json()
+    me2 = AuthedClient(api, body2["access_token"], body2["refresh_token"])
+    blob = me2.get_metadata().json()
+    assert blob == {"theme": "dark", "lang": "es", "tutorial_seen": True}
+
+
+@pytest.mark.admin
+def test_full_mission_lifecycle_completion_and_xp_credit(admin, user, request):
+    """Admin authors mission → user plays runs + buys store → completion
+    + XP credit visible on /profile."""
+    import os
+    from helpers.compose import exec_sql
+    from helpers.factory import rand_item_name
+
+    def _cleanup():
+        # Raw SQL avoids depending on the admin fixture surviving
+        # teardown order — pytest can already tear `admin` down before
+        # finalizers fire.
+        exec_sql(
+            "DELETE FROM missions",
+            db_name=os.environ["DB_NAME"],
+            db_user=os.environ["DB_USER"],
+            pg_port=os.environ["POSTGRES_PORT"],
+        )
+    request.addfinalizer(_cleanup)
+
+    # Clean slate so the user only sees the missions we author.
+    for m in admin.admin_list_missions().json():
+        admin.admin_delete_mission(m["id"])
+
+    play_m = admin.admin_create_mission(
+        name="Daily 3 runs",
+        cycle="daily",
+        trigger_event="run_completed",
+        target={"amount": 3},
+        xp_reward=300,
+        is_active=True,
+    ).json()
+    buy_m = admin.admin_create_mission(
+        name="Buy a pack",
+        cycle="one_shot",
+        trigger_event="store_purchase",
+        target={"item_type": "currency_bundle", "amount": 1},
+        xp_reward=400,
+        is_active=True,
+    ).json()
+
+    start_xp = user.get_profile().json()["total_xp"]
+
+    # Complete the play_m by running 3 times.
+    for _ in range(3):
+        user.submit_run(score=0, distance=0, coins_collected=0, duration_ms=1000)
+
+    # Stock wallet + buy a bundle for buy_m.
+    user_id = user.get_profile().json()["user_id"]
+    admin.admin_grant(user_id, "soft", 100)
+    item = admin.admin_create_store_item(
+        name=rand_item_name("Pack"),
+        item_type="currency_bundle",
+        currency="soft",
+        cost=10,
+        payload=[{"type": "currency", "currency": "soft", "amount": 5}],
+    ).json()
+    user.purchase_store_item(item["id"])
+
+    end_xp = user.get_profile().json()["total_xp"]
+    rows = {m["id"]: m for m in user.list_missions().json()}
+    assert rows[play_m["id"]]["completed_at"] is not None
+    assert rows[buy_m["id"]]["completed_at"] is not None
+    assert end_xp - start_xp >= 700  # 300 + 400 from missions
+
+
+@pytest.mark.admin
+def test_full_energy_regen_then_spend_in_purchase(admin, user):
+    """Energy ticks up while idle, gets spent on an energy-priced store
+    item, and the clock restarts."""
+    from datetime import datetime, timedelta, timezone
+    from helpers.factory import rand_item_name
+
+    # Force the user's energy to 30 with an anchor 5 minutes ago so a
+    # /wallet read grants 5 more energy → 35.
+    user_id = user.get_profile().json()["user_id"]
+    five_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
+    # Set via admin grant + direct SQL — admin grant alone can't set the
+    # anchor, but the test_energy_regen helper does. Re-use it inline.
+    from tests.test_energy_regen import _set_energy_state
+    _set_energy_state(user_id, 30, five_ago)
+
+    body = user.get_wallet().json()
+    assert body["energy"] == 35
+    assert body["energy_refill_started_at"] is not None
+
+    # Energy-priced store item: cost 10 energy.
+    item = admin.admin_create_store_item(
+        name=rand_item_name("EnergySink"),
+        item_type="custom",
+        currency="energy",
+        cost=10,
+        payload=[{"type": "currency", "currency": "soft", "amount": 1}],
+    ).json()
+    assert user.purchase_store_item(item["id"]).status_code == 200
+    body = user.get_wallet().json()
+    assert body["energy"] == 25
+    # Clock kept ticking (still < cap), anchor still set.
+    assert body["energy_refill_started_at"] is not None
+
+
+@pytest.mark.admin
+def test_full_character_rarity_propagates_to_user_listing(admin, user):
+    """Admin assigns rarity, user-facing list reflects it — and PATCH
+    can change it on the fly without touching other fields."""
+    from helpers.factory import rand_character_name
+
+    char = admin.admin_create_character(
+        name=rand_character_name(),
+        rarity="rare",
+        default_unlocked=True,
+        metadata={"sort": 1},
+    ).json()
+    row = next(c for c in user.list_characters().json() if c["id"] == char["id"])
+    assert row["rarity"] == "rare"
+    assert row["unlocked"] is True
+    assert row["metadata"] == {"sort": 1}
+
+    admin.admin_update_character(char["id"], rarity="legendary")
+    row = next(c for c in user.list_characters().json() if c["id"] == char["id"])
+    assert row["rarity"] == "legendary"
+    # Untouched fields preserved.
+    assert row["metadata"] == {"sort": 1}
+    assert row["unlocked"] is True

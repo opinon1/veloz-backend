@@ -1,0 +1,27 @@
+meta {
+  name: Create Mission (one-shot store)
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{base_url}}/admin/missions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "name": "Buy an esmeralda pack",
+    "description": "Awarded once per account on first high-currency bundle purchase",
+    "cycle": "one_shot",
+    "trigger_event": "store_purchase",
+    "target": { "item_type": "currency_bundle", "amount": 1 },
+    "xp_reward": 2000,
+    "is_active": true
+  }
+}

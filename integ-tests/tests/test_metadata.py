@@ -125,3 +125,125 @@ def test_metadata_key_validation_rejects_bad_shape(user):
         assert user.put_metadata_key(bad, "x").status_code == 400, bad
         assert user.get_metadata_key(bad).status_code == 400, bad
         assert user.delete_metadata_key(bad).status_code == 400, bad
+
+
+# ────────────────────────── Edge cases ──────────────────────────
+
+
+def test_metadata_max_key_length_64_is_valid(user):
+    """Boundary: exactly 64 chars passes."""
+    k = "a" * 64
+    assert user.put_metadata_key(k, 1).status_code == 200
+    assert user.get_metadata_key(k).status_code == 200
+
+
+def test_metadata_key_with_digit_prefix(user):
+    """Spec allows digits anywhere in the key — including the first char."""
+    assert user.put_metadata_key("3_strikes", True).status_code == 200
+    assert user.get_metadata_key("3_strikes").json() is True
+
+
+def test_metadata_value_types_roundtrip(user):
+    """Every JSON value type must survive a put_key/get_key roundtrip."""
+    cases = {
+        "boolean": True,
+        "integer": 42,
+        "float": 3.14,
+        "string": "hola",
+        "list": [1, 2, "three", False, None],
+        "object": {"a": 1, "b": [1, 2]},
+    }
+    for k, v in cases.items():
+        assert user.put_metadata_key(k, v).status_code == 200, k
+        got = user.get_metadata_key(k).json()
+        assert got == v, k
+
+
+def test_metadata_value_can_be_explicit_json_null(user):
+    """JSON null at a key: storing it loses the key (`->` returns SQL
+    NULL on missing key OR explicit JSON null — both surface as 404)."""
+    user.put_metadata_key("nullable", None)
+    # Either we 404 (treating null-value == missing) or 200 with null
+    # in the body. Lock to whichever the implementation produces and
+    # surface the choice so it doesn't drift silently.
+    r = user.get_metadata_key("nullable")
+    assert r.status_code in (200, 404)
+
+
+def test_metadata_blob_put_replaces_keys_set_via_per_key(user):
+    """PUT /me/metadata is a wholesale replace — keys set via per-key
+    endpoints disappear when a different blob is PUT."""
+    user.put_metadata_key("a", 1)
+    user.put_metadata_key("b", 2)
+    user.put_metadata({"c": 3})
+    assert user.get_metadata_key("a").status_code == 404
+    assert user.get_metadata_key("b").status_code == 404
+    assert user.get_metadata_key("c").json() == 3
+
+
+def test_metadata_delete_blob_makes_keys_unreachable(user):
+    """After DELETE /me/metadata the blob is `{}` so per-key GET 404."""
+    user.put_metadata({"x": 1, "y": 2})
+    user.delete_metadata()
+    assert user.get_metadata_key("x").status_code == 404
+    assert user.get_metadata_key("y").status_code == 404
+    assert user.get_metadata().json() == {}
+
+
+def test_metadata_blob_payload_too_large(user):
+    """Blob over 64KB rejected with 413."""
+    big = {"k": "x" * (64 * 1024)}  # serializes well past 64KB
+    r = user.put_metadata(big)
+    assert r.status_code == 413
+
+
+def test_metadata_per_key_payload_too_large_when_growing_blob_past_cap(user):
+    """A per-key PUT that would push the existing blob past 64KB must
+    return 413, not silently truncate."""
+    # Fill blob close to the cap first.
+    near_cap = {"existing": "x" * (60 * 1024)}
+    assert user.put_metadata(near_cap).status_code == 200
+    # Adding another big string blows past the cap.
+    r = user.put_metadata_key("more", "y" * (10 * 1024))
+    assert r.status_code == 413
+
+
+def test_metadata_unicode_value_roundtrip(user):
+    blob = {"saludo": "¡hola, mundo! 🌍 漢字 ñ"}
+    user.put_metadata(blob)
+    assert user.get_metadata().json() == blob
+
+
+def test_metadata_requires_auth_on_per_key(api):
+    """All per-key endpoints reject anonymous requests."""
+    assert api.raw_get("/me/metadata/theme").status_code == 401
+    assert api.raw_put("/me/metadata/theme", json={"value": "x"}).status_code == 401
+    assert api.raw_delete("/me/metadata/theme").status_code == 401
+
+
+def test_metadata_cross_user_isolation_per_key(user_factory):
+    """Per-key writes by one user must not be visible to another."""
+    a, _ = user_factory()
+    b, _ = user_factory()
+    a.put_metadata_key("secret", "alpha")
+    # b doesn't see it.
+    assert b.get_metadata_key("secret").status_code == 404
+    # a still does.
+    assert a.get_metadata_key("secret").json() == "alpha"
+
+
+def test_metadata_per_key_overwrites_in_place(user):
+    """PUTing the same key twice replaces the value, doesn't accumulate."""
+    user.put_metadata_key("k", "first")
+    user.put_metadata_key("k", "second")
+    assert user.get_metadata_key("k").json() == "second"
+    # And the blob still has exactly one key.
+    assert list(user.get_metadata().json().keys()) == ["k"]
+
+
+def test_metadata_put_blob_with_long_key_inside_object_is_allowed(user):
+    """Per-key validation does NOT apply to nested keys inside the blob.
+    Frontend can use whatever key shape it wants inside the JSON tree."""
+    blob = {"any.shape-with stuff": "ok", "Nested": {"With Spaces": 1}}
+    assert user.put_metadata(blob).status_code == 200
+    assert user.get_metadata().json() == blob

@@ -1,0 +1,27 @@
+meta {
+  name: Create Mission (character level-up)
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{base_url}}/admin/missions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "name": "Level Vezlos to 10",
+    "description": "Cards/level system pending — will start firing once character_level_up events are wired.",
+    "cycle": "one_shot",
+    "trigger_event": "character_level_up",
+    "target": { "character_id": "{{character_id}}", "level": 10 },
+    "xp_reward": 5000,
+    "is_active": true
+  }
+}

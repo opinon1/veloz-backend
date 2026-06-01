@@ -39,6 +39,27 @@ def _set_energy_state(user_id: str, energy: int, started_at: datetime | None) ->
     )
 
 
+def _ledger_sum(user_id: str, reason: str) -> int:
+    """Direct DB read for SUM(delta) on energy ledger rows. exec_sql is
+    write-only in the INTEG_NO_DOCKER fallback path so we go through
+    psycopg ourselves."""
+    import psycopg
+
+    with psycopg.connect(
+        host="localhost",
+        port=int(os.environ["POSTGRES_PORT"]),
+        dbname=os.environ["DB_NAME"],
+        user=os.environ["DB_USER"],
+        password=os.environ["DB_PASSWORD"],
+    ) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT COALESCE(SUM(delta),0) FROM wallet_ledger "
+            "WHERE user_id=%s AND currency='energy' AND reason=%s",
+            (user_id, reason),
+        )
+        return int(cur.fetchone()[0])
+
+
 # ──────────────────────────── Tests ────────────────────────────
 
 
@@ -113,3 +134,134 @@ def test_spending_back_below_cap_restarts_clock(admin, user):
     body = user.get_wallet().json()
     assert body["energy"] == 40
     assert body["energy_refill_started_at"] is not None
+
+
+# ────────────────────────── Edge cases ──────────────────────────
+
+
+@pytest.mark.admin
+def test_spend_to_exactly_50_clears_clock(admin, user):
+    """50 is the cap — spending down to exactly 50 must clear the
+    clock (not start it). Clock only runs when stored < 50."""
+    user_id = user.get_profile().json()["user_id"]
+    admin.admin_grant(user_id, "energy", 70)
+    assert user.spend("energy", 20).status_code == 200
+    body = user.get_wallet().json()
+    assert body["energy"] == 50
+    assert body["energy_refill_started_at"] is None
+
+
+@pytest.mark.admin
+def test_grant_exactly_to_50_clears_clock(admin, user):
+    """Granting energy that lands exactly on the cap stops the timer."""
+    # New user has clock running.
+    user_id = user.get_profile().json()["user_id"]
+    user.get_wallet()  # ensures clock initialized
+    admin.admin_grant(user_id, "energy", 50)
+    body = user.get_wallet().json()
+    assert body["energy"] == 50
+    assert body["energy_refill_started_at"] is None
+
+
+def test_lazy_refill_with_anchor_far_in_the_past_caps_at_50(user):
+    """An anchor from days ago is no different from an anchor an hour
+    ago — saturation behavior is the same."""
+    user_id = user.get_profile().json()["user_id"]
+    days_ago = datetime.now(timezone.utc) - timedelta(days=3)
+    _set_energy_state(user_id, 0, days_ago)
+    body = user.get_wallet().json()
+    assert body["energy"] == 50
+    assert body["energy_refill_started_at"] is None
+
+
+def test_lazy_refill_with_partial_minute_grants_zero(user):
+    """30 seconds elapsed = 0 full minutes = no grant; anchor unchanged."""
+    user_id = user.get_profile().json()["user_id"]
+    anchor = datetime.now(timezone.utc) - timedelta(seconds=30)
+    _set_energy_state(user_id, 0, anchor)
+    body = user.get_wallet().json()
+    assert body["energy"] == 0
+    new_anchor = datetime.fromisoformat(body["energy_refill_started_at"])
+    assert abs((new_anchor - anchor).total_seconds()) < 2
+
+
+def test_lazy_refill_writes_regen_ledger_entry(user):
+    """Every regen burst lands a single `regen` row in wallet_ledger
+    so the ledger explains where any non-spend balance came from."""
+    user_id = user.get_profile().json()["user_id"]
+    # 5 min elapsed → 5 energy granted.
+    _set_energy_state(user_id, 0, datetime.now(timezone.utc) - timedelta(minutes=5))
+    user.get_wallet()
+    assert _ledger_sum(user_id, "regen") >= 5
+
+
+def test_repeated_reads_dont_double_credit(user):
+    """Calling /wallet twice in the same second doesn't grant twice."""
+    user_id = user.get_profile().json()["user_id"]
+    _set_energy_state(user_id, 0, datetime.now(timezone.utc) - timedelta(minutes=3))
+    user.get_wallet()
+    e1 = user.get_wallet().json()["energy"]
+    e2 = user.get_wallet().json()["energy"]
+    e3 = user.get_wallet().json()["energy"]
+    assert e1 == e2 == e3 == 3
+
+
+@pytest.mark.admin
+def test_grant_below_cap_keeps_clock_running(admin, user):
+    """Granting energy that stays below cap shouldn't reset the clock
+    — only spending past the cap (downward) starts it. If already
+    running, leave the existing anchor in place (no progress reset)."""
+    user_id = user.get_profile().json()["user_id"]
+    # New user → clock initialized on first read.
+    initial = user.get_wallet().json()
+    assert initial["energy_refill_started_at"] is not None
+    initial_clock = datetime.fromisoformat(initial["energy_refill_started_at"])
+
+    admin.admin_grant(user_id, "energy", 5)
+    body = user.get_wallet().json()
+    assert body["energy"] == 5
+    # Clock still set (energy < cap). Anchor preserved (Postgres rounds
+    # the in-memory `Utc::now()` to microsecond precision so we compare
+    # within 1s tolerance rather than exact string equality).
+    after = datetime.fromisoformat(body["energy_refill_started_at"])
+    assert abs((after - initial_clock).total_seconds()) < 1
+
+
+@pytest.mark.admin
+def test_spend_records_ledger(admin, user):
+    """Sanity: spending energy still writes a ledger row, regardless
+    of the regen wiring above it."""
+    user_id = user.get_profile().json()["user_id"]
+    admin.admin_grant(user_id, "energy", 30)
+    user.spend("energy", 10)
+    assert _ledger_sum(user_id, "spend") == -10
+
+
+def test_anchor_in_the_future_grants_nothing(user):
+    """Defensive: clock somehow set in the future (clock drift, bad
+    fixture) must not produce negative grants or rollover bugs."""
+    user_id = user.get_profile().json()["user_id"]
+    future = datetime.now(timezone.utc) + timedelta(hours=1)
+    _set_energy_state(user_id, 0, future)
+    body = user.get_wallet().json()
+    assert body["energy"] == 0
+
+
+@pytest.mark.admin
+def test_refill_after_partial_spend_continues_from_below_cap(admin, user):
+    """User at 60 (no clock) spends 30 → at 30 with clock. Set anchor
+    10 minutes back → reads as 40."""
+    user_id = user.get_profile().json()["user_id"]
+    admin.admin_grant(user_id, "energy", 60)
+    user.spend("energy", 30)
+    # Now energy=30 with clock running.
+    _set_energy_state(user_id, 30, datetime.now(timezone.utc) - timedelta(minutes=10))
+    body = user.get_wallet().json()
+    assert body["energy"] == 40
+
+
+def test_wallet_response_shape_includes_refill_field(user):
+    """Contract: every wallet GET returns these four keys, regardless
+    of whether the clock is running."""
+    body = user.get_wallet().json()
+    assert set(body.keys()) == {"high", "soft", "energy", "energy_refill_started_at"}

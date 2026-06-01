@@ -1,0 +1,27 @@
+meta {
+  name: Create Mission (weekly currency)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{base_url}}/admin/missions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+body:json {
+  {
+    "name": "Collect 500 diamantes this week",
+    "description": "Reward 1000 XP for collecting 500 soft currency",
+    "cycle": "weekly",
+    "trigger_event": "currency_collected",
+    "target": { "currency": "soft", "amount": 500 },
+    "xp_reward": 1000,
+    "is_active": true
+  }
+}
