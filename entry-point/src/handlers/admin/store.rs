@@ -43,6 +43,12 @@ pub struct CreateItemRequest {
     pub payload: serde_json::Value,
     #[serde(default)]
     pub metadata: serde_json::Value,
+    /// If true, every newly-signed-up user has this item's payload
+    /// Grants applied automatically (currency credits, skin unlocks,
+    /// …). IAP-priced items can also be marked default — the payload
+    /// is fulfilled the same way without going through Etomin.
+    #[serde(default)]
+    pub is_default: bool,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -57,6 +63,7 @@ pub struct StoreItemRow {
     pub payload: serde_json::Value,
     pub metadata: serde_json::Value,
     pub is_active: bool,
+    pub is_default: bool,
 }
 
 pub async fn create_item(
@@ -80,9 +87,9 @@ pub async fn create_item(
 
     let row = sqlx::query_as::<_, StoreItemRow>(
         r#"
-        INSERT INTO store_items (name, description, item_type, cost, currency, iap_product_id, payload, metadata)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING id, name, description, item_type, cost, currency, iap_product_id, payload, metadata, is_active
+        INSERT INTO store_items (name, description, item_type, cost, currency, iap_product_id, payload, metadata, is_default)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING id, name, description, item_type, cost, currency, iap_product_id, payload, metadata, is_active, is_default
         "#,
     )
     .bind(&payload.name)
@@ -93,6 +100,7 @@ pub async fn create_item(
     .bind(&payload.iap_product_id)
     .bind(&payload.payload)
     .bind(&payload.metadata)
+    .bind(payload.is_default)
     .fetch_one(&state.db)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -105,7 +113,7 @@ pub async fn list_all_items(
     AdminClaims(_): AdminClaims,
 ) -> Result<Json<Vec<StoreItemRow>>, StatusCode> {
     let rows = sqlx::query_as::<_, StoreItemRow>(
-        "SELECT id, name, description, item_type, cost, currency, iap_product_id, payload, metadata, is_active FROM store_items ORDER BY created_at DESC",
+        "SELECT id, name, description, item_type, cost, currency, iap_product_id, payload, metadata, is_active, is_default FROM store_items ORDER BY created_at DESC",
     )
     .fetch_all(&state.db)
     .await
@@ -125,6 +133,7 @@ pub struct UpdateItemRequest {
     pub payload: Option<serde_json::Value>,
     pub metadata: Option<serde_json::Value>,
     pub is_active: Option<bool>,
+    pub is_default: Option<bool>,
 }
 
 pub async fn update_item(
@@ -181,9 +190,10 @@ pub async fn update_item(
             payload         = COALESCE($8, payload),
             metadata        = COALESCE($9, metadata),
             is_active       = COALESCE($10, is_active),
+            is_default      = COALESCE($11, is_default),
             updated_at      = CURRENT_TIMESTAMP
         WHERE id = $1
-        RETURNING id, name, description, item_type, cost, currency, iap_product_id, payload, metadata, is_active
+        RETURNING id, name, description, item_type, cost, currency, iap_product_id, payload, metadata, is_active, is_default
         "#,
     )
     .bind(id)
@@ -196,6 +206,7 @@ pub async fn update_item(
     .bind(&payload.payload)
     .bind(&payload.metadata)
     .bind(payload.is_active)
+    .bind(payload.is_default)
     .fetch_optional(&state.db)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?

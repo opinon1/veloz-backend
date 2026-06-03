@@ -2,6 +2,7 @@ use axum::Router;
 use axum::routing::{delete, get, patch, post, put};
 
 use super::{avatars, battlepass, characters, frames, missions, prize_wheel, skins, store, users};
+use crate::handlers::signup_defaults;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -92,5 +93,11 @@ pub fn router() -> Router<AppState> {
         .route(
             "/missions/{id}",
             patch(missions::update_mission).delete(missions::delete_mission),
+        )
+        // Signup defaults backfill — reapplies every is_default catalog
+        // row to every existing user (idempotent).
+        .route(
+            "/signup-defaults/backfill",
+            post(signup_defaults::backfill::backfill),
         )
 }

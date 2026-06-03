@@ -398,6 +398,11 @@ class AuthedClient:
             f"/admin/missions/{mission_id}", self.access_token
         )
 
+    def admin_backfill_signup_defaults(self) -> httpx.Response:
+        return self._c.raw_post(
+            "/admin/signup-defaults/backfill", self.access_token
+        )
+
     # ── Auth continued ──
     def verify(self) -> httpx.Response:
         return self._c.raw_get("/auth/verify", self.access_token)

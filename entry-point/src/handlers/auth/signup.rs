@@ -2,6 +2,7 @@ use axum::{extract::State, Json, http::StatusCode};
 use bcrypt::{hash, DEFAULT_COST};
 use serde::{Deserialize, Serialize};
 use crate::state::AppState;
+use crate::handlers::signup_defaults::service::apply_defaults_for_user;
 
 #[derive(Deserialize)]
 pub struct SignupRequest {
@@ -66,6 +67,13 @@ pub async fn signup(
     let password_hash = hash(payload.password, DEFAULT_COST)
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { message: "Internal server error".into() })))?;
 
+    let mut tx = state.db.begin().await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { message: "Internal server error".into() }),
+        )
+    })?;
+
     let user = sqlx::query_as::<_, SignupResponse>(
         r#"
         INSERT INTO users (username, email, password_hash)
@@ -76,13 +84,31 @@ pub async fn signup(
     .bind(&payload.username)
     .bind(&email)
     .bind(password_hash)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| match e {
         sqlx::Error::Database(db_err) if db_err.code().as_deref() == Some("23505") => {
             (StatusCode::CONFLICT, Json(ErrorResponse { message: "User with this email or username already exists".into() }))
         }
         _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { message: "Internal server error".into() })),
+    })?;
+
+    // Apply signup-default catalog rows (is_default skins, avatars,
+    // frames, characters, and store_item payloads). Wrapped in the
+    // same transaction as the user insert so a failure here rolls
+    // the user back rather than creating a half-provisioned account.
+    apply_defaults_for_user(&mut tx, user.id).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { message: "Internal server error".into() }),
+        )
+    })?;
+
+    tx.commit().await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { message: "Internal server error".into() }),
+        )
     })?;
 
     Ok((StatusCode::CREATED, Json(user)))

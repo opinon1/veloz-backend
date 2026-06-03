@@ -1,0 +1,37 @@
+meta {
+  name: Backfill Defaults
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{base_url}}/admin/signup-defaults/backfill
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{access_token}}
+}
+
+docs {
+  Re-applies every catalog row currently flagged `is_default` to
+  every existing user. Idempotent:
+    - Skin / avatar / frame ownership uses ON CONFLICT DO NOTHING.
+    - Character unlock toggles only if it was previously locked.
+    - Store-item payloads use the `default_grants_applied` table to
+      track which (user, item) pairs already got their payload, so
+      currency isn't credited twice on re-run.
+
+  Returns:
+    {
+      "users_processed": <int>,
+      "totals": {
+        "skins": <int>,
+        "avatars": <int>,
+        "frames": <int>,
+        "characters": <int>,
+        "store_items": <int>
+      }
+    }
+}

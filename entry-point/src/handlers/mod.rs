@@ -12,6 +12,7 @@ pub mod pricing;
 pub mod prize_wheel;
 pub mod profile;
 pub mod runs;
+pub mod signup_defaults;
 pub mod skins;
 pub mod store;
 pub mod wallet;

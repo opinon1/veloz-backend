@@ -12,6 +12,11 @@ pub struct CreateAvatarRequest {
     pub price: i64,
     #[serde(default = "default_currency")]
     pub currency: String,
+    /// If true, every newly-signed-up user automatically owns this
+    /// avatar. Existing users are NOT backfilled by toggling this
+    /// flag — use POST /admin/signup-defaults/backfill for that.
+    #[serde(default)]
+    pub is_default: bool,
 }
 fn default_currency() -> String { "soft".into() }
 
@@ -22,6 +27,7 @@ pub struct AvatarRow {
     pub price: i64,
     pub currency: String,
     pub is_active: bool,
+    pub is_default: bool,
 }
 
 pub async fn create_avatar(
@@ -41,14 +47,15 @@ pub async fn create_avatar(
 
     let row = sqlx::query_as::<_, AvatarRow>(
         r#"
-        INSERT INTO avatars (name, price, currency)
-        VALUES ($1, $2, $3)
-        RETURNING id, name, price, currency, is_active
+        INSERT INTO avatars (name, price, currency, is_default)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, name, price, currency, is_active, is_default
         "#,
     )
     .bind(&payload.name)
     .bind(payload.price)
     .bind(&payload.currency)
+    .bind(payload.is_default)
     .fetch_one(&state.db)
     .await
     .map_err(|e| match e {
@@ -64,7 +71,7 @@ pub async fn list_all_avatars(
     AdminClaims(_): AdminClaims,
 ) -> Result<Json<Vec<AvatarRow>>, StatusCode> {
     let rows = sqlx::query_as::<_, AvatarRow>(
-        "SELECT id, name, price, currency, is_active FROM avatars ORDER BY created_at DESC",
+        "SELECT id, name, price, currency, is_active, is_default FROM avatars ORDER BY created_at DESC",
     )
     .fetch_all(&state.db)
     .await
@@ -79,6 +86,7 @@ pub struct UpdateAvatarRequest {
     pub price: Option<i64>,
     pub currency: Option<String>,
     pub is_active: Option<bool>,
+    pub is_default: Option<bool>,
 }
 
 pub async fn update_avatar(
@@ -110,9 +118,10 @@ pub async fn update_avatar(
             price      = COALESCE($3, price),
             currency   = COALESCE($4, currency),
             is_active  = COALESCE($5, is_active),
+            is_default = COALESCE($6, is_default),
             updated_at = CURRENT_TIMESTAMP
         WHERE id = $1
-        RETURNING id, name, price, currency, is_active
+        RETURNING id, name, price, currency, is_active, is_default
         "#,
     )
     .bind(id)
@@ -120,6 +129,7 @@ pub async fn update_avatar(
     .bind(payload.price)
     .bind(&payload.currency)
     .bind(payload.is_active)
+    .bind(payload.is_default)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| match e {
