@@ -19,10 +19,12 @@
 //!     lands in the DLQ after `maxReceiveCount` attempts.
 //!
 //! Disabled cleanly when `SQS_EMAIL_QUEUE_URL` is unset (local dev): the
-//! `Mailer` is `None` in `AppState` and `dispatch` becomes a no-op.
+//! `Mailer` is `None` in `AppState` and `dispatch*` becomes a no-op.
 
 use aws_config::BehaviorVersion;
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use std::env;
 use uuid::Uuid;
 
@@ -44,12 +46,20 @@ pub struct EmailJob {
 pub enum EmailKind {
     /// Sent after a successful signup.
     Welcome { username: String },
-    /// Sent after a successful store purchase.
+    /// Sent after a real-money payment is APPROVED (Etomin). Fields map 1:1 to
+    /// the `order_confirmed.html` template placeholders. `cta_url`,
+    /// `support_email`, and `year` are filled at render time from config.
     PurchaseReceipt {
-        item_name: String,
-        cost: i64,
+        customer_name: String,
+        pack_name: String,
+        /// Whole-currency amount charged (no minor units).
+        amount: i64,
+        /// Symbol/label shown before the amount, e.g. "$".
         currency: String,
-        new_balance: i64,
+        order_id: String,
+        payment_method: String,
+        /// Pre-formatted purchase date (dd/mm/yyyy).
+        order_date: String,
     },
     /// Sent after a refund is issued. (No refund flow wired yet — the
     /// template is ready for when one lands.)
@@ -67,65 +77,6 @@ struct Rendered {
     text: String,
 }
 
-impl EmailKind {
-    fn render(&self) -> Rendered {
-        match self {
-            EmailKind::Welcome { username } => Rendered {
-                subject: "Welcome to Veloz".to_string(),
-                html: format!(
-                    "<h1>Welcome, {u}!</h1><p>Your Veloz account is ready. \
-                     Jump in and start your first run.</p>",
-                    u = esc(username)
-                ),
-                text: format!(
-                    "Welcome, {username}!\n\nYour Veloz account is ready. \
-                     Jump in and start your first run."
-                ),
-            },
-            EmailKind::PurchaseReceipt {
-                item_name,
-                cost,
-                currency,
-                new_balance,
-            } => Rendered {
-                subject: format!("Your Veloz receipt — {item_name}"),
-                html: format!(
-                    "<h1>Thanks for your purchase</h1>\
-                     <p>You bought <strong>{item}</strong>.</p>\
-                     <p>Charged: <strong>{cost} {cur}</strong><br>\
-                     Remaining balance: <strong>{bal} {cur}</strong></p>",
-                    item = esc(item_name),
-                    cost = cost,
-                    cur = esc(currency),
-                    bal = new_balance,
-                ),
-                text: format!(
-                    "Thanks for your purchase!\n\nItem: {item_name}\n\
-                     Charged: {cost} {currency}\nRemaining balance: {new_balance} {currency}"
-                ),
-            },
-            EmailKind::Refund {
-                item_name,
-                amount,
-                currency,
-            } => Rendered {
-                subject: format!("Your Veloz refund — {item_name}"),
-                html: format!(
-                    "<h1>Refund issued</h1>\
-                     <p>We refunded <strong>{amt} {cur}</strong> for \
-                     <strong>{item}</strong>.</p>",
-                    amt = amount,
-                    cur = esc(currency),
-                    item = esc(item_name),
-                ),
-                text: format!(
-                    "Refund issued.\n\nItem: {item_name}\nRefunded: {amount} {currency}"
-                ),
-            },
-        }
-    }
-}
-
 /// Minimal HTML-escaping for user-controlled strings (username, item names)
 /// interpolated into the HTML body. Keeps a stray `<` from breaking markup.
 fn esc(s: &str) -> String {
@@ -141,6 +92,11 @@ pub struct Mailer {
     ses: aws_sdk_sesv2::Client,
     queue_url: String,
     from: String,
+    /// Support mailto shown in receipt footers. Configurable so it isn't
+    /// baked into the binary.
+    support_addr: String,
+    /// "Back to game" CTA link in the receipt.
+    cta_url: String,
 }
 
 impl Mailer {
@@ -150,15 +106,16 @@ impl Mailer {
     ///
     ///   SQS_EMAIL_QUEUE_URL  — required; presence enables the feature
     ///   EMAIL_FROM           — sender address (default noreply@velozthegame.com)
+    ///   EMAIL_SUPPORT_ADDR   — support mailto (default soporte@velozthegame.com)
+    ///   EMAIL_CTA_URL        — receipt CTA link (default https://velozthegame.com)
     ///   SES_REGION           — optional SES region override (else AWS_REGION)
     pub async fn from_env() -> Option<Self> {
         let queue_url = env::var("SQS_EMAIL_QUEUE_URL")
             .ok()
             .filter(|s| !s.is_empty())?;
-        let from = env::var("EMAIL_FROM")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "noreply@velozthegame.com".to_string());
+        let from = env_or("EMAIL_FROM", "noreply@velozthegame.com");
+        let support_addr = env_or("EMAIL_SUPPORT_ADDR", "soporte@velozthegame.com");
+        let cta_url = env_or("EMAIL_CTA_URL", "https://velozthegame.com");
 
         // Shared config (region + credentials) from the standard provider
         // chain. On Fargate this resolves the task IAM role automatically.
@@ -181,7 +138,76 @@ impl Mailer {
             ses,
             queue_url,
             from,
+            support_addr,
+            cta_url,
         })
+    }
+
+    fn render(&self, kind: &EmailKind) -> Rendered {
+        match kind {
+            EmailKind::Welcome { username } => Rendered {
+                subject: "Welcome to Veloz".to_string(),
+                html: format!(
+                    "<h1>Welcome, {u}!</h1><p>Your Veloz account is ready. \
+                     Jump in and start your first run.</p>",
+                    u = esc(username)
+                ),
+                text: format!(
+                    "Welcome, {username}!\n\nYour Veloz account is ready. \
+                     Jump in and start your first run."
+                ),
+            },
+            EmailKind::PurchaseReceipt {
+                customer_name,
+                pack_name,
+                amount,
+                currency,
+                order_id,
+                payment_method,
+                order_date,
+            } => {
+                let html = include_str!("templates/order_confirmed.html")
+                    .replace("{{customer_name}}", &esc(customer_name))
+                    .replace("{{pack_name}}", &esc(pack_name))
+                    .replace("{{currency}}", &esc(currency))
+                    .replace("{{amount}}", &amount.to_string())
+                    .replace("{{order_id}}", &esc(order_id))
+                    .replace("{{order_date}}", &esc(order_date))
+                    .replace("{{payment_method}}", &esc(payment_method))
+                    .replace("{{cta_url}}", &esc(&self.cta_url))
+                    .replace("{{support_email}}", &esc(&self.support_addr))
+                    .replace("{{year}}", &chrono::Utc::now().year().to_string());
+                let text = format!(
+                    "¡Gracias por tu compra, {customer_name}!\n\n\
+                     Paquete: {pack_name}\nTotal pagado: {currency}{amount}\n\
+                     Nº de pedido: {order_id}\nFecha: {order_date}\n\
+                     Método de pago: {payment_method}"
+                );
+                Rendered {
+                    subject: format!("Tu compra en Veloz — {pack_name}"),
+                    html,
+                    text,
+                }
+            }
+            EmailKind::Refund {
+                item_name,
+                amount,
+                currency,
+            } => Rendered {
+                subject: format!("Your Veloz refund — {item_name}"),
+                html: format!(
+                    "<h1>Refund issued</h1>\
+                     <p>We refunded <strong>{amt} {cur}</strong> for \
+                     <strong>{item}</strong>.</p>",
+                    amt = amount,
+                    cur = esc(currency),
+                    item = esc(item_name),
+                ),
+                text: format!(
+                    "Refund issued.\n\nItem: {item_name}\nRefunded: {amount} {currency}"
+                ),
+            },
+        }
     }
 
     /// Producer: serialize the job and put it on the queue.
@@ -264,7 +290,7 @@ impl Mailer {
     async fn send_one(&self, job: &EmailJob) -> Result<(), String> {
         use aws_sdk_sesv2::types::{Body, Content, Destination, EmailContent, Message};
 
-        let r = job.kind.render();
+        let r = self.render(&job.kind);
 
         let subject = Content::builder()
             .data(r.subject)
@@ -285,9 +311,7 @@ impl Mailer {
         let body = Body::builder().html(html).text(text).build();
         let message = Message::builder().subject(subject).body(body).build();
         let content = EmailContent::builder().simple(message).build();
-        let dest = Destination::builder()
-            .to_addresses(&job.to)
-            .build();
+        let dest = Destination::builder().to_addresses(&job.to).build();
 
         self.ses
             .send_email()
@@ -300,6 +324,15 @@ impl Mailer {
         Ok(())
     }
 }
+
+fn env_or(key: &str, default: &str) -> String {
+    env::var(key)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| default.to_string())
+}
+
+// ───────────────────────── Producer helpers ─────────────────────────
 
 /// Fire-and-forget producer for a known recipient. Spawns the enqueue so the
 /// caller's response is never delayed and an SQS hiccup never bubbles up. No-op
@@ -316,24 +349,72 @@ pub fn dispatch_to(state: &AppState, to: String, kind: EmailKind) {
     });
 }
 
-/// Fire-and-forget producer that resolves the user's email first. Use from
-/// handlers that have a `user_id` but not the address. No-op when disabled.
-pub fn dispatch_to_user(state: &AppState, user_id: Uuid, kind: EmailKind) {
-    if state.mailer.is_none() {
-        return;
-    }
-    let db = state.db.clone();
-    let state = state.clone();
-    tokio::spawn(async move {
-        let row: Result<Option<(String,)>, _> =
-            sqlx::query_as("SELECT email FROM users WHERE id = $1")
-                .bind(user_id)
-                .fetch_optional(&db)
-                .await;
-        match row {
-            Ok(Some((to,))) => dispatch_to(&state, to, kind),
-            Ok(None) => tracing::warn!("email: no user {user_id} to mail"),
-            Err(e) => tracing::warn!("email: lookup for {user_id} failed: {e}"),
+/// Look up the buyer's email + username, build a `PurchaseReceipt`, and enqueue
+/// it. Awaited form — used by the background reconciler. Logs and returns on any
+/// failure (email is best-effort).
+pub async fn enqueue_purchase_receipt(
+    mailer: &Mailer,
+    db: &PgPool,
+    user_id: Uuid,
+    pack_name: String,
+    amount: i64,
+    currency: String,
+    order_id: String,
+    payment_method: String,
+) {
+    let row: Result<Option<(String, String)>, _> =
+        sqlx::query_as("SELECT email, username FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(db)
+            .await;
+    let (to, customer_name) = match row {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            tracing::warn!("receipt: no user {user_id} to mail");
+            return;
         }
+        Err(e) => {
+            tracing::warn!("receipt: lookup for {user_id} failed: {e}");
+            return;
+        }
+    };
+    let job = EmailJob {
+        to,
+        kind: EmailKind::PurchaseReceipt {
+            customer_name,
+            pack_name,
+            amount,
+            currency,
+            order_id,
+            payment_method,
+            order_date: chrono::Utc::now().format("%d/%m/%Y").to_string(),
+        },
+    };
+    if let Err(e) = mailer.enqueue(&job).await {
+        tracing::warn!("receipt enqueue failed: {e}");
+    }
+}
+
+/// Fire-and-forget purchase receipt from a request handler. Spawns so the HTTP
+/// response is never delayed. No-op when the mailer is disabled.
+#[allow(clippy::too_many_arguments)]
+pub fn dispatch_purchase_receipt(
+    state: &AppState,
+    user_id: Uuid,
+    pack_name: String,
+    amount: i64,
+    currency: String,
+    order_id: String,
+    payment_method: String,
+) {
+    let Some(mailer) = state.mailer.clone() else {
+        return;
+    };
+    let db = state.db.clone();
+    tokio::spawn(async move {
+        enqueue_purchase_receipt(
+            &mailer, &db, user_id, pack_name, amount, currency, order_id, payment_method,
+        )
+        .await;
     });
 }

@@ -41,16 +41,15 @@ pub async fn purchase_item(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let item: Option<(i64, String, serde_json::Value, bool, String, String)> = sqlx::query_as(
-        "SELECT cost, currency, payload, is_active, item_type, name FROM store_items WHERE id = $1",
+    let item: Option<(i64, String, serde_json::Value, bool, String)> = sqlx::query_as(
+        "SELECT cost, currency, payload, is_active, item_type FROM store_items WHERE id = $1",
     )
     .bind(item_id)
     .fetch_optional(&mut *tx)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let (cost, currency_str, payload, is_active, item_type, item_name) =
-        item.ok_or(StatusCode::NOT_FOUND)?;
+    let (cost, currency_str, payload, is_active, item_type) = item.ok_or(StatusCode::NOT_FOUND)?;
     if !is_active {
         return Err(StatusCode::GONE);
     }
@@ -156,19 +155,6 @@ pub async fn purchase_item(
     tx.commit()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    // Fire-and-forget purchase receipt. Enqueued after commit so the email is
-    // never sent for a rolled-back purchase; failure here can't affect the 200.
-    crate::services::mailer::dispatch_to_user(
-        &state,
-        session.user_id,
-        crate::services::mailer::EmailKind::PurchaseReceipt {
-            item_name,
-            cost: adjusted_cost,
-            currency: wallet_currency.as_str().to_string(),
-            new_balance,
-        },
-    );
 
     Ok(Json(PurchaseItemResponse {
         item_id,

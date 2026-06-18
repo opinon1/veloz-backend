@@ -21,6 +21,7 @@ use uuid::Uuid;
 use crate::handlers::grants_util::apply_grant;
 use crate::models::store_types::validate_grants;
 use crate::services::etomin::EtominClient;
+use crate::services::mailer::{enqueue_purchase_receipt, Mailer};
 
 /// PENDING rows older than this are marked EXPIRED locally without bothering
 /// Etomin (their 3DS challenge typically expires in 15-30 min). 1h is a safe
@@ -32,6 +33,7 @@ struct PaymentForReconcile {
     id: Uuid,
     user_id: Uuid,
     item_id: Uuid,
+    amount: i64,
     status: String,
     etomin_id: Option<String>,
     created_at: DateTime<Utc>,
@@ -43,10 +45,11 @@ struct PaymentForReconcile {
 pub async fn reconcile_payment(
     db: &PgPool,
     etomin: &EtominClient,
+    mailer: Option<&Mailer>,
     payment_id: Uuid,
 ) -> Result<bool, ()> {
     let row: Option<PaymentForReconcile> = sqlx::query_as(
-        "SELECT id, user_id, item_id, status, etomin_id, created_at FROM payments WHERE id = $1",
+        "SELECT id, user_id, item_id, amount, status, etomin_id, created_at FROM payments WHERE id = $1",
     )
     .bind(payment_id)
     .fetch_optional(db)
@@ -94,7 +97,7 @@ pub async fn reconcile_payment(
 
     match new_status.as_str() {
         "APPROVED" => {
-            apply_approval(db, &row, &resp).await?;
+            apply_approval(db, mailer, &row, &resp).await?;
             Ok(true)
         }
         "DECLINED" => {
@@ -126,17 +129,18 @@ pub async fn reconcile_payment(
 
 async fn apply_approval(
     db: &PgPool,
+    mailer: Option<&Mailer>,
     row: &PaymentForReconcile,
     etomin_response: &serde_json::Value,
 ) -> Result<(), ()> {
-    let item_payload: Option<(serde_json::Value,)> =
-        sqlx::query_as("SELECT payload FROM store_items WHERE id = $1")
+    let item: Option<(serde_json::Value, String)> =
+        sqlx::query_as("SELECT payload, name FROM store_items WHERE id = $1")
             .bind(row.item_id)
             .fetch_optional(db)
             .await
             .map_err(|_| ())?;
-    let payload = match item_payload {
-        Some((p,)) => p,
+    let (payload, item_name) = match item {
+        Some(p) => p,
         None => return Err(()),
     };
     let grants = validate_grants(&payload).map_err(|_| ())?;
@@ -155,7 +159,8 @@ async fn apply_approval(
     .map_err(|_| ())?;
 
     if updated.rows_affected() == 0 {
-        // Someone else won the race. Their grants applied (or will). Bail.
+        // Someone else won the race. Their grants applied (or will), and they
+        // send the receipt. Bail without re-sending.
         tx.rollback().await.ok();
         return Ok(());
     }
@@ -165,12 +170,29 @@ async fn apply_approval(
     }
 
     tx.commit().await.map_err(|_| ())?;
+
+    // We won the flip: send the receipt (best-effort). This is the 3DS path —
+    // the user approved after the initial PENDING. payment_method is "Tarjeta"
+    // since the card cleared the 3DS challenge.
+    if let Some(mailer) = mailer {
+        enqueue_purchase_receipt(
+            mailer,
+            db,
+            row.user_id,
+            item_name,
+            row.amount,
+            "$".to_string(),
+            row.id.to_string(),
+            "Tarjeta".to_string(),
+        )
+        .await;
+    }
     Ok(())
 }
 
 /// One sweep of the background reconciler. Caps the number of rows touched
 /// per sweep so a sudden backlog doesn't burn through Etomin rate limits.
-pub async fn sweep(db: &PgPool, etomin: &EtominClient, limit: i64) {
+pub async fn sweep(db: &PgPool, etomin: &EtominClient, mailer: Option<&Mailer>, limit: i64) {
     // Two-step: pick stuck rows, then reconcile each. Doing them serially
     // avoids hammering Etomin in parallel; if throughput becomes a problem
     // we can `tokio::join!` a small set later.
@@ -186,6 +208,6 @@ pub async fn sweep(db: &PgPool, etomin: &EtominClient, limit: i64) {
     };
 
     for (id,) in pending {
-        let _ = reconcile_payment(db, etomin, id).await;
+        let _ = reconcile_payment(db, etomin, mailer, id).await;
     }
 }

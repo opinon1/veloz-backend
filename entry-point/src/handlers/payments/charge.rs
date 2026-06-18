@@ -51,14 +51,14 @@ pub async fn charge(
 ) -> Result<(StatusCode, Json<ChargeResponse>), StatusCode> {
     // Validate item state first (404/410/400) — user-facing checks should
     // answer regardless of whether Etomin is configured.
-    let row: Option<(i64, String, bool, serde_json::Value)> = sqlx::query_as(
-        "SELECT cost, currency, is_active, payload FROM store_items WHERE id = $1",
+    let row: Option<(i64, String, bool, serde_json::Value, String)> = sqlx::query_as(
+        "SELECT cost, currency, is_active, payload, name FROM store_items WHERE id = $1",
     )
     .bind(payload.item_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let (cost, item_currency, is_active, item_payload) =
+    let (cost, item_currency, is_active, item_payload, item_name) =
         row.ok_or(StatusCode::NOT_FOUND)?;
     if !is_active {
         return Err(StatusCode::GONE);
@@ -165,6 +165,20 @@ pub async fn charge(
     }
 
     tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Fire-and-forget receipt for the frictionless-approval path. The 3DS
+    // path approves later via the reconciler, which sends its own receipt.
+    if final_status == "APPROVED" {
+        crate::services::mailer::dispatch_purchase_receipt(
+            &state,
+            session.user_id,
+            item_name,
+            cost,
+            "$".to_string(),
+            payment_id.to_string(),
+            "Tarjeta".to_string(),
+        );
+    }
 
     Ok((
         http_status,

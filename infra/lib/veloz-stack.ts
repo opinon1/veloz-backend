@@ -244,6 +244,8 @@ export class VelozStack extends cdk.Stack {
         AWS_REGION: this.region,
         SQS_EMAIL_QUEUE_URL: emailQueue.queueUrl,
         EMAIL_FROM: "noreply@velozthegame.com",
+        EMAIL_SUPPORT_ADDR: "soporte@velozthegame.com",
+        EMAIL_CTA_URL: "https://velozthegame.com",
       },
       secrets: {
         DB_USER: ecs.Secret.fromSecretsManager(dbSecret, "username"),

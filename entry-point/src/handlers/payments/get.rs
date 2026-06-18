@@ -45,7 +45,7 @@ pub async fn get_payment(
         if let Some(etomin) = state.etomin.as_ref() {
             // Best-effort. Etomin / network failures don't block the read —
             // caller still sees the cached PENDING row, sweeper retries.
-            let _ = reconcile_payment(&state.db, etomin, id).await;
+            let _ = reconcile_payment(&state.db, etomin, state.mailer.as_ref(), id).await;
         }
     }
 
