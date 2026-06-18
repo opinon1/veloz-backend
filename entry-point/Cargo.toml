@@ -39,3 +39,9 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-sqs = "1"
 aws-sdk-sesv2 = "1"
+
+# rustls crypto provider. reqwest pulls rustls+ring; the AWS SDK pulls
+# rustls+aws-lc-rs. With both providers present, rustls 0.23 can't auto-pick
+# one and panics at first TLS use. We depend on rustls directly to install a
+# process-default provider in main() before any client is built.
+rustls = { version = "0.23", features = ["aws-lc-rs"] }

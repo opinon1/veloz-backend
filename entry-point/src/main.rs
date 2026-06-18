@@ -30,6 +30,13 @@ fn url_encode(s: &str) -> String {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Two rustls crypto providers are in the dependency tree (ring via reqwest,
+    // aws-lc-rs via the AWS SDK). rustls 0.23 refuses to guess between them and
+    // panics at first TLS use. Install one as the process default up front.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("install rustls aws-lc-rs crypto provider");
+
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
