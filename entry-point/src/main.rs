@@ -89,11 +89,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let mailer = match services::mailer::Mailer::from_env().await {
+        Some(m) => {
+            tracing::info!("Mailer configured (SQS + SES)");
+            Some(m)
+        }
+        None => {
+            tracing::warn!("Mailer not configured: SQS_EMAIL_QUEUE_URL unset");
+            None
+        }
+    };
+
     let state = AppState {
         db: pool,
         redis: redis_manager,
         etomin,
+        mailer,
     };
+
+    // Email worker: long-polls the SQS queue and sends each job through SES.
+    // poll_once blocks up to 20s waiting for messages, so this loop never
+    // busy-spins.
+    if let Some(mailer) = state.mailer.clone() {
+        tokio::spawn(async move {
+            loop {
+                mailer.poll_once().await;
+            }
+        });
+        tracing::info!("Email worker running (SQS long-poll)");
+    }
 
     // Background payment reconciler. Etomin has no webhooks, so we poll
     // for status updates on PENDING rows. Catches "user closed the 3DS tab"

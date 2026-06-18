@@ -33,3 +33,9 @@ rand = "0.8"
 
 # HTTP client for Etomin payments API
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Transactional email: SQS (queue) producer/consumer + SES v2 (sender).
+# Credentials resolve from the Fargate task IAM role via aws-config.
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-sqs = "1"
+aws-sdk-sesv2 = "1"

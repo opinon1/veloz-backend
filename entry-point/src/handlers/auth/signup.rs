@@ -111,5 +111,15 @@ pub async fn signup(
         )
     })?;
 
+    // Fire-and-forget welcome email. We already hold the normalized address,
+    // so dispatch directly rather than re-querying. No-op if mailer disabled.
+    crate::services::mailer::dispatch_to(
+        &state,
+        email,
+        crate::services::mailer::EmailKind::Welcome {
+            username: user.username.clone(),
+        },
+    );
+
     Ok((StatusCode::CREATED, Json(user)))
 }

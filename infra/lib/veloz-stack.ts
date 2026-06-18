@@ -12,6 +12,8 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as route53 from "aws-cdk-lib/aws-route53";
 import * as route53targets from "aws-cdk-lib/aws-route53-targets";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
+import * as sqs from "aws-cdk-lib/aws-sqs";
+import * as ses from "aws-cdk-lib/aws-ses";
 
 interface VelozStackProps extends cdk.StackProps {
   repositoryName: string;
@@ -85,6 +87,26 @@ export class VelozStack extends cdk.Stack {
       "EtominSecret",
       "veloz/etomin"
     );
+
+    // ──────────────────────────────────────────────────────────
+    // Transactional email queue. Producer (the app) enqueues jobs;
+    // the same app's background worker consumes + sends via SES.
+    // A failed send is redelivered after the visibility timeout;
+    // after 5 attempts the message lands in the DLQ for inspection.
+    // ──────────────────────────────────────────────────────────
+    const emailDlq = new sqs.Queue(this, "EmailDlq", {
+      queueName: "veloz-emails-dlq",
+      retentionPeriod: cdk.Duration.days(14),
+    });
+
+    const emailQueue = new sqs.Queue(this, "EmailQueue", {
+      queueName: "veloz-emails",
+      // Must exceed the worst-case send time so an in-flight message isn't
+      // redelivered while still being processed.
+      visibilityTimeout: cdk.Duration.seconds(60),
+      retentionPeriod: cdk.Duration.days(4),
+      deadLetterQueue: { queue: emailDlq, maxReceiveCount: 5 },
+    });
 
     // ──────────────────────────────────────────────────────────
     // Security groups.
@@ -192,6 +214,16 @@ export class VelozStack extends cdk.Stack {
     redisAuthToken.grantRead(taskDef.taskRole);
     etominSecret.grantRead(taskDef.taskRole);
 
+    // Email: produce + consume the queue, and send through SES.
+    emailQueue.grantSendMessages(taskDef.taskRole);
+    emailQueue.grantConsumeMessages(taskDef.taskRole);
+    taskDef.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ["ses:SendEmail", "ses:SendRawEmail"],
+        resources: ["*"],
+      })
+    );
+
     const container = taskDef.addContainer("app", {
       image: ecs.ContainerImage.fromEcrRepository(repo, "latest"),
       logging: ecs.LogDrivers.awsLogs({
@@ -208,6 +240,10 @@ export class VelozStack extends cdk.Stack {
         REDIS_TLS: "true",
         RATE_LIMIT_ENABLED: "true",
         ETOMIN_BASE_URL: "https://pagos.etomin.com",
+        // Email: presence of the queue URL enables the mailer + worker.
+        AWS_REGION: this.region,
+        SQS_EMAIL_QUEUE_URL: emailQueue.queueUrl,
+        EMAIL_FROM: "noreply@velozthegame.com",
       },
       secrets: {
         DB_USER: ecs.Secret.fromSecretsManager(dbSecret, "username"),
@@ -289,6 +325,14 @@ export class VelozStack extends cdk.Stack {
     // Route53. fromLookup resolves it at synth time.
     const zone = route53.HostedZone.fromLookup(this, "Zone", {
       domainName,
+    });
+
+    // SES domain identity. Easy DKIM publishes the CNAME records into the
+    // hosted zone automatically, so the domain verifies hands-off. Any
+    // address @domainName (e.g. noreply@) can then send. Sandbox removal is
+    // a separate account-level request (see runbook / put-account-details).
+    new ses.EmailIdentity(this, "EmailIdentity", {
+      identity: ses.Identity.publicHostedZone(zone),
     });
 
     // DNS-validated cert. Zone is in this account so CDK creates the
@@ -373,5 +417,7 @@ export class VelozStack extends cdk.Stack {
     new cdk.CfnOutput(this, "RedisEndpoint", {
       value: redis.attrPrimaryEndPointAddress,
     });
+    new cdk.CfnOutput(this, "EmailQueueUrl", { value: emailQueue.queueUrl });
+    new cdk.CfnOutput(this, "EmailDlqUrl", { value: emailDlq.queueUrl });
   }
 }
