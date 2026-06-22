@@ -71,6 +71,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         redis_scheme, redis_password, redis_host, redis_port
     );
 
+    // Cloned before the main pool consumes db_opts; reused for the read-only
+    // stats pool below.
+    let stats_opts = db_opts.clone();
+
     tracing::info!("Connecting to Postgres...");
     let pool = PgPoolOptions::new().connect_with(db_opts).await?;
     tracing::info!("Connected to Postgres");
@@ -107,11 +111,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // Read-only stats pool for the /admin/stats dashboard. Reuses the app DB
+    // credentials but `SET ROLE veloz_stats` (a NOLOGIN, SELECT-only role created
+    // in migrations) on every connection, then pins the session read-only with a
+    // short statement_timeout. So ad-hoc admin queries can't write or hang the
+    // box. If the role is missing (migrations not yet applied) the first
+    // connection fails and the dashboard is disabled rather than crashing boot.
+    let stats_db = match PgPoolOptions::new()
+        .max_connections(4)
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                sqlx::query(
+                    "SET ROLE veloz_stats; \
+                     SET default_transaction_read_only = on; \
+                     SET statement_timeout = '10s'; \
+                     SET idle_in_transaction_session_timeout = '15s'",
+                )
+                .execute(conn)
+                .await?;
+                Ok(())
+            })
+        })
+        .connect_with(stats_opts)
+        .await
+    {
+        Ok(p) => {
+            tracing::info!("Stats dashboard pool configured (SET ROLE veloz_stats, read-only)");
+            Some(p)
+        }
+        Err(e) => {
+            tracing::warn!("Stats pool unavailable, dashboard disabled: {e}");
+            None
+        }
+    };
+
     let state = AppState {
         db: pool,
         redis: redis_manager,
         etomin,
         mailer,
+        stats_db,
     };
 
     // Email worker: long-polls the SQS queue and sends each job through SES.
@@ -138,7 +177,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             interval.tick().await;
             loop {
                 interval.tick().await;
-                handlers::payments::reconcile::sweep(&db, &etomin_client, mailer.as_ref(), 50).await;
+                handlers::payments::reconcile::sweep(&db, &etomin_client, mailer.as_ref(), 50)
+                    .await;
             }
         });
         tracing::info!("Payment reconciler running (30s interval)");

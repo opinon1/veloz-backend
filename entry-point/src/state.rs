@@ -14,4 +14,9 @@ pub struct AppState {
     /// Optional: only present when SQS_EMAIL_QUEUE_URL is set. When absent,
     /// email dispatch is a no-op (see `services::mailer::dispatch_to`).
     pub mailer: Option<Mailer>,
+    /// Optional read-only pool for the stats dashboard. Reuses the app DB creds
+    /// but runs each session as the NOLOGIN `veloz_stats` role (SET ROLE), forced
+    /// `default_transaction_read_only = on` with a short statement_timeout.
+    /// None (e.g. role missing) makes the chart/query endpoints return 503.
+    pub stats_db: Option<PgPool>,
 }

@@ -6,5 +6,6 @@ mod missions;
 mod prize_wheel;
 pub mod router;
 mod skins;
+mod stats;
 mod store;
 mod users;

@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Veloz — Ops Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --txt:#e6e8ec; --muted:#8b93a1; --accent:#4f9dff; --danger:#ff5f6e; --ok:#3fd07f; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--txt); }
+  header { display:flex; align-items:center; gap:16px; padding:12px 20px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:5; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  nav { display:flex; gap:4px; }
+  nav button { background:transparent; border:1px solid transparent; color:var(--muted); padding:6px 12px; border-radius:6px; cursor:pointer; font-size:13px; }
+  nav button.active { color:var(--txt); background:var(--bg); border-color:var(--line); }
+  #who { margin-left:auto; color:var(--muted); font-size:12px; display:flex; gap:8px; align-items:center; }
+  main { padding:20px; max-width:1400px; margin:0 auto; }
+  .hidden { display:none !important; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(420px,1fr)); gap:16px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .card h3 { margin:0 0 2px; font-size:14px; }
+  .card .desc { color:var(--muted); font-size:12px; margin-bottom:10px; }
+  .card .actions { float:right; display:flex; gap:6px; }
+  .card canvas { max-height:280px; }
+  .stat-row { display:flex; flex-wrap:wrap; gap:18px; }
+  .stat { min-width:120px; }
+  .stat .v { font-size:26px; font-weight:700; }
+  .stat .k { color:var(--muted); font-size:12px; text-transform:capitalize; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var(--panel); }
+  .tablewrap { max-height:320px; overflow:auto; }
+  input,select,textarea,button { font:inherit; }
+  input,select,textarea { background:var(--bg); border:1px solid var(--line); color:var(--txt); border-radius:6px; padding:8px 10px; width:100%; }
+  textarea { font-family:ui-monospace,Menlo,monospace; min-height:110px; resize:vertical; }
+  label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
+  .btn { background:var(--accent); border:none; color:#fff; padding:8px 14px; border-radius:6px; cursor:pointer; width:auto; }
+  .btn.sm { padding:4px 9px; font-size:12px; }
+  .btn.ghost { background:transparent; border:1px solid var(--line); color:var(--muted); }
+  .btn.danger { background:var(--danger); }
+  .row { display:flex; gap:10px; flex-wrap:wrap; }
+  .row > * { flex:1; min-width:140px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px; margin-bottom:18px; }
+  .panel h2 { margin:0 0 4px; font-size:15px; }
+  .panel p.hint { color:var(--muted); font-size:12px; margin:0 0 14px; }
+  pre.out { background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:10px; overflow:auto; max-height:200px; font-size:12px; color:var(--muted); white-space:pre-wrap; }
+  .toast { position:fixed; bottom:20px; right:20px; background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:8px; padding:12px 16px; max-width:380px; box-shadow:0 8px 30px rgba(0,0,0,.4); }
+  .toast.err { border-left-color:var(--danger); }
+  .toast.ok { border-left-color:var(--ok); }
+  .login { max-width:360px; margin:80px auto; }
+  code { background:var(--bg); padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+
+<!-- ───────── Login gate ───────── -->
+<div id="login" class="login panel">
+  <h2>Veloz Ops Dashboard</h2>
+  <p class="hint">Sign in with an admin account, or paste an access token.</p>
+  <label>Email</label><input id="li-email" type="email" autocomplete="username" />
+  <label>Password</label><input id="li-pass" type="password" autocomplete="current-password" />
+  <div style="margin-top:14px;" class="row">
+    <button class="btn" onclick="signin()">Sign in</button>
+  </div>
+  <label style="margin-top:18px;">…or paste access token</label>
+  <input id="li-token" placeholder="Bearer token" />
+  <div style="margin-top:10px;"><button class="btn ghost" onclick="useToken()">Use token</button></div>
+</div>
+
+<!-- ───────── App ───────── -->
+<div id="app" class="hidden">
+  <header>
+    <h1>Veloz Ops</h1>
+    <nav>
+      <button data-tab="dash" class="active" onclick="tab('dash')">Dashboard</button>
+      <button data-tab="query" onclick="tab('query')">Query</button>
+      <button data-tab="actions" onclick="tab('actions')">Admin Actions</button>
+    </nav>
+    <div id="who"><span id="who-txt"></span><button class="btn ghost sm" onclick="refreshAll()">↻ Refresh</button><button class="btn ghost sm" onclick="logout()">Logout</button></div>
+  </header>
+  <main>
+
+    <!-- Dashboard tab -->
+    <section id="tab-dash">
+      <details class="panel">
+        <summary style="cursor:pointer;font-weight:600">+ New chart</summary>
+        <div style="margin-top:14px;">
+          <div class="row">
+            <div><label>Title</label><input id="nc-title" /></div>
+            <div><label>Type</label><select id="nc-type" onchange="ncTypeChange()">
+              <option value="table">table</option><option value="line">line</option>
+              <option value="bar">bar</option><option value="pie">pie</option><option value="stat">stat</option>
+            </select></div>
+          </div>
+          <label>SQL (SELECT only — runs read-only)</label>
+          <textarea id="nc-sql" placeholder="SELECT date_trunc('day', created_at)::date AS day, count(*) AS signups FROM users GROUP BY 1 ORDER BY 1"></textarea>
+          <div class="row" id="nc-axes">
+            <div><label>x column</label><input id="nc-x" placeholder="day" /></div>
+            <div><label>y column</label><input id="nc-y" placeholder="signups" /></div>
+            <div><label>series column (optional)</label><input id="nc-series" placeholder="currency" /></div>
+          </div>
+          <div style="margin-top:14px;"><button class="btn" onclick="createChart()">Save chart</button></div>
+        </div>
+      </details>
+      <div id="charts" class="grid"></div>
+    </section>
+
+    <!-- Query tab -->
+    <section id="tab-query" class="hidden">
+      <div class="panel">
+        <h2>Ad-hoc query</h2>
+        <p class="hint">Read-only. Single <code>SELECT</code>, capped at 5000 rows, 10s timeout.</p>
+        <textarea id="q-sql" placeholder="SELECT status, count(*) FROM payments GROUP BY 1 ORDER BY 2 DESC"></textarea>
+        <div style="margin-top:12px;" class="row">
+          <button class="btn" onclick="runQuery()">Run (⌘/Ctrl+Enter)</button>
+          <button class="btn ghost" onclick="saveFromQuery()">Save as chart…</button>
+        </div>
+      </div>
+      <div id="q-result" class="panel hidden"></div>
+    </section>
+
+    <!-- Admin actions tab -->
+    <section id="tab-actions" class="hidden">
+      <div class="panel">
+        <h2>Grant / deduct currency</h2>
+        <p class="hint"><code>POST /admin/users/:id/grant</code> — negative amount deducts.</p>
+        <div class="row">
+          <div><label>User ID</label><input id="g-user" /></div>
+          <div><label>Currency</label><select id="g-cur"><option>high</option><option>soft</option><option>energy</option></select></div>
+          <div><label>Amount</label><input id="g-amt" type="number" /></div>
+          <div><label>Reason</label><input id="g-reason" placeholder="admin_grant" /></div>
+        </div>
+        <div style="margin-top:12px;"><button class="btn" onclick="grantCurrency()">Apply grant</button></div>
+      </div>
+
+      <div class="panel">
+        <h2>Set user role</h2>
+        <p class="hint"><code>PATCH /admin/users/:id/role</code></p>
+        <div class="row">
+          <div><label>User ID</label><input id="r-user" /></div>
+          <div><label>Role</label><select id="r-role"><option>user</option><option>admin</option></select></div>
+        </div>
+        <div style="margin-top:12px;"><button class="btn" onclick="setRole()">Update role</button></div>
+      </div>
+
+      <div class="panel">
+        <h2>Backfill signup defaults</h2>
+        <p class="hint"><code>POST /admin/signup-defaults/backfill</code> — idempotent, applies default catalog to all users.</p>
+        <button class="btn" onclick="backfill()">Run backfill</button>
+      </div>
+
+      <div class="panel">
+        <h2>Raw admin call</h2>
+        <p class="hint">Escape hatch for any <code>/admin/*</code> endpoint. Body is JSON (blank for GET/DELETE).</p>
+        <div class="row">
+          <div style="flex:0 0 120px;"><label>Method</label><select id="raw-method"><option>GET</option><option>POST</option><option>PATCH</option><option>PUT</option><option>DELETE</option></select></div>
+          <div><label>Path</label><input id="raw-path" placeholder="/admin/store" /></div>
+        </div>
+        <label>JSON body</label>
+        <textarea id="raw-body" placeholder='{ "name": "..." }'></textarea>
+        <div style="margin-top:12px;"><button class="btn" onclick="rawCall()">Send</button></div>
+      </div>
+
+      <div id="actions-out" class="panel hidden"></div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+const API = ''; // same origin
+let TOKEN = localStorage.getItem('veloz_admin_token') || '';
+const charts = {}; // chartRowId -> Chart instance
+const PALETTE = ['#4f9dff','#3fd07f','#ffb648','#ff5f6e','#b98bff','#34d3c6','#f06ec0','#9aa7b8'];
+
+// ───── auth ─────
+async function signin() {
+  const email = val('li-email'), password = val('li-pass');
+  try {
+    const r = await fetch(API + '/auth/signin', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email, password }) });
+    if (!r.ok) throw new Error('signin failed ('+r.status+')');
+    const d = await r.json();
+    const tok = d.access_token || d.accessToken || d.token;
+    if (!tok) throw new Error('no access_token in response');
+    setToken(tok);
+  } catch (e) { toast(e.message, 'err'); }
+}
+function useToken() { const t = val('li-token').trim(); if (t) setToken(t); }
+function setToken(t) { TOKEN = t; localStorage.setItem('veloz_admin_token', t); boot(); }
+function logout() { TOKEN=''; localStorage.removeItem('veloz_admin_token'); location.reload(); }
+
+async function api(path, opts={}) {
+  const headers = Object.assign({ 'Authorization': 'Bearer ' + TOKEN }, opts.headers || {});
+  if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+  const r = await fetch(API + path, Object.assign({}, opts, { headers }));
+  const text = await r.text();
+  let data; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!r.ok) {
+    const msg = typeof data === 'string' ? data : (data && (data.message||data.error)) || ('HTTP '+r.status);
+    throw new Error(msg);
+  }
+  return data;
+}
+
+async function boot() {
+  // Validate token by listing charts; on 401/403 fall back to login.
+  try {
+    show('login', false); show('app', true);
+    document.getElementById('who-txt').textContent = 'admin';
+    await loadCharts();
+  } catch (e) {
+    toast('Auth failed: ' + e.message, 'err');
+    show('login', true); show('app', false);
+  }
+}
+
+// ───── tabs ─────
+function tab(name) {
+  ['dash','query','actions'].forEach(t => show('tab-'+t, t===name));
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.tab===name));
+}
+
+// ───── charts ─────
+async function loadCharts() {
+  const defs = await api('/admin/stats/charts');
+  const host = document.getElementById('charts');
+  host.innerHTML = '';
+  Object.values(charts).forEach(c => c.destroy && c.destroy());
+  for (const def of defs) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML =
+      '<div class="actions">' +
+        (def.is_builtin ? '' : '<button class="btn ghost sm" onclick="delChart(\''+def.id+'\')">✕</button>') +
+        '<button class="btn ghost sm" onclick="reloadChart(\''+def.id+'\')">↻</button>' +
+      '</div>' +
+      '<h3>'+esc(def.title)+'</h3>' +
+      '<div class="desc">'+esc(def.description||'')+'</div>' +
+      '<div class="body" id="cbody-'+def.id+'">…</div>';
+    host.appendChild(card);
+    renderChartDef(def);
+  }
+}
+
+async function reloadChart(id) {
+  const defs = await api('/admin/stats/charts');
+  const def = defs.find(d => d.id === id);
+  if (def) renderChartDef(def);
+}
+
+async function renderChartDef(def) {
+  const body = document.getElementById('cbody-' + def.id);
+  if (!body) return;
+  body.innerHTML = '…';
+  let res;
+  try { res = await api('/admin/stats/charts/' + def.id + '/data'); }
+  catch (e) { body.innerHTML = '<span style="color:var(--danger)">'+esc(e.message)+'</span>'; return; }
+  renderResult(body, def.chart_type, def.config || {}, res, def.id);
+}
+
+function renderResult(body, type, cfg, res, key) {
+  if (charts[key]) { charts[key].destroy(); delete charts[key]; }
+  if (type === 'stat') return renderStat(body, res);
+  if (type === 'table' || !['line','bar','pie'].includes(type)) return renderTable(body, res);
+  // chart.js
+  body.innerHTML = '<canvas></canvas>';
+  const canvas = body.querySelector('canvas');
+  const { labels, datasets } = buildSeries(type, cfg, res);
+  charts[key] = new Chart(canvas, {
+    type: type === 'pie' ? 'pie' : type,
+    data: { labels, datasets },
+    options: {
+      responsive:true, plugins:{ legend:{ labels:{ color:'#8b93a1' } } },
+      scales: type==='pie' ? {} : {
+        x:{ ticks:{ color:'#8b93a1' }, grid:{ color:'#262b36' } },
+        y:{ ticks:{ color:'#8b93a1' }, grid:{ color:'#262b36' } }
+      }
+    }
+  });
+}
+
+function buildSeries(type, cfg, res) {
+  const rows = res.rows;
+  const cols = res.columns;
+  const x = cfg.x || cols[0];
+  const y = cfg.y || cols.find(c => c !== x);
+  const series = cfg.series;
+  if (type === 'pie') {
+    return { labels: rows.map(r => String(r[x])), datasets:[{ data: rows.map(r => num(r[y])), backgroundColor: PALETTE }] };
+  }
+  if (series) {
+    const xs = [...new Set(rows.map(r => String(r[x])))];
+    const groups = [...new Set(rows.map(r => String(r[series])))];
+    const datasets = groups.map((g, i) => ({
+      label: g,
+      data: xs.map(xv => { const m = rows.find(r => String(r[x])===xv && String(r[series])===g); return m ? num(m[y]) : null; }),
+      borderColor: PALETTE[i%PALETTE.length], backgroundColor: PALETTE[i%PALETTE.length], tension:.25
+    }));
+    return { labels: xs, datasets };
+  }
+  return { labels: rows.map(r => String(r[x])), datasets:[{ label:y, data: rows.map(r => num(r[y])), borderColor:PALETTE[0], backgroundColor:PALETTE[0], tension:.25 }] };
+}
+
+function renderStat(body, res) {
+  const r = res.rows[0] || {};
+  body.innerHTML = '<div class="stat-row">' + res.columns.map(c =>
+    '<div class="stat"><div class="v">'+esc(fmt(r[c]))+'</div><div class="k">'+esc(c.replace(/_/g,' '))+'</div></div>'
+  ).join('') + '</div>';
+}
+
+function renderTable(body, res) {
+  if (!res.rows.length) { body.innerHTML = '<div class="desc">no rows</div>'; return; }
+  const head = '<tr>' + res.columns.map(c => '<th>'+esc(c)+'</th>').join('') + '</tr>';
+  const rows = res.rows.map(r => '<tr>' + res.columns.map(c => '<td>'+esc(fmt(r[c]))+'</td>').join('') + '</tr>').join('');
+  body.innerHTML = '<div class="tablewrap"><table>'+head+rows+'</table></div><div class="desc" style="margin-top:6px">'+res.row_count+' rows</div>';
+}
+
+// ───── new chart ─────
+function ncTypeChange() { const t = val('nc-type'); show('nc-axes', t!=='table' && t!=='stat'); }
+async function createChart() {
+  const config = {}; const x=val('nc-x'), y=val('nc-y'), s=val('nc-series');
+  if (x) config.x=x; if (y) config.y=y; if (s) config.series=s;
+  const payload = { title: val('nc-title'), sql: val('nc-sql'), chart_type: val('nc-type'), config };
+  try {
+    await api('/admin/stats/charts', { method:'POST', body: JSON.stringify(payload) });
+    toast('Chart saved', 'ok'); ['nc-title','nc-sql','nc-x','nc-y','nc-series'].forEach(id=>document.getElementById(id).value='');
+    loadCharts();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function delChart(id) {
+  try { await api('/admin/stats/charts/'+id, { method:'DELETE' }); loadCharts(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+
+// ───── ad-hoc query ─────
+async function runQuery() {
+  const out = document.getElementById('q-result');
+  try {
+    const res = await api('/admin/stats/query', { method:'POST', body: JSON.stringify({ sql: val('q-sql') }) });
+    show('q-result', true); renderTable(out, res);
+  } catch (e) { show('q-result', true); out.innerHTML = '<span style="color:var(--danger)">'+esc(e.message)+'</span>'; }
+}
+function saveFromQuery() {
+  document.getElementById('nc-sql').value = val('q-sql'); tab('dash');
+  document.querySelector('#tab-dash details').open = true; window.scrollTo(0,0);
+}
+
+// ───── admin actions ─────
+async function grantCurrency() {
+  const id = val('g-user');
+  const body = { currency: val('g-cur'), amount: parseInt(val('g-amt'),10) };
+  const reason = val('g-reason'); if (reason) body.reason = reason;
+  await doAction('POST', '/admin/users/'+id+'/grant', body);
+}
+async function setRole() { await doAction('PATCH', '/admin/users/'+val('r-user')+'/role', { role: val('r-role') }); }
+async function backfill() { await doAction('POST', '/admin/signup-defaults/backfill', null); }
+async function rawCall() {
+  const m = val('raw-method'); const p = val('raw-path'); let b = null;
+  const raw = val('raw-body').trim();
+  if (raw) { try { b = JSON.parse(raw); } catch { return toast('Body is not valid JSON', 'err'); } }
+  await doAction(m, p, b);
+}
+async function doAction(method, path, body) {
+  const out = document.getElementById('actions-out');
+  try {
+    const res = await api(path, { method, body: body!=null ? JSON.stringify(body) : undefined });
+    show('actions-out', true);
+    out.innerHTML = '<h2 style="color:var(--ok)">OK · '+method+' '+esc(path)+'</h2><pre class="out">'+esc(JSON.stringify(res, null, 2) || '(no content)')+'</pre>';
+    toast('Done', 'ok');
+  } catch (e) {
+    show('actions-out', true);
+    out.innerHTML = '<h2 style="color:var(--danger)">Error · '+method+' '+esc(path)+'</h2><pre class="out">'+esc(e.message)+'</pre>';
+    toast(e.message, 'err');
+  }
+}
+
+function refreshAll() { loadCharts(); }
+
+// ───── helpers ─────
+function val(id){ return document.getElementById(id).value; }
+function show(id, on){ document.getElementById(id).classList.toggle('hidden', !on); }
+function num(v){ const n = typeof v==='number'?v:parseFloat(v); return isNaN(n)?0:n; }
+function fmt(v){ if (v===null||v===undefined) return ''; if (typeof v==='object') return JSON.stringify(v); return String(v); }
+function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function toast(msg, kind){ const t = document.createElement('div'); t.className='toast '+(kind||''); t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(), 4200); }
+
+document.addEventListener('keydown', e => { if ((e.metaKey||e.ctrlKey) && e.key==='Enter' && !document.getElementById('tab-query').classList.contains('hidden')) runQuery(); });
+
+// ───── start ─────
+if (TOKEN) boot(); else { show('login', true); show('app', false); }
+</script>
+</body>
+</html>

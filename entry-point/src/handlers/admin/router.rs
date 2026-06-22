@@ -1,7 +1,9 @@
 use axum::Router;
 use axum::routing::{delete, get, patch, post, put};
 
-use super::{avatars, battlepass, characters, frames, missions, prize_wheel, skins, store, users};
+use super::{
+    avatars, battlepass, characters, frames, missions, prize_wheel, skins, stats, store, users,
+};
 use crate::handlers::signup_defaults;
 use crate::state::AppState;
 
@@ -100,4 +102,15 @@ pub fn router() -> Router<AppState> {
             "/signup-defaults/backfill",
             post(signup_defaults::backfill::backfill),
         )
+        // ───── Stats dashboard ─────
+        // The page shell is public (a JS app holding no secrets); every data
+        // and chart endpoint below is gated by AdminClaims inside the handler.
+        .route("/stats", get(stats::serve_dashboard))
+        .route(
+            "/stats/charts",
+            get(stats::list_charts).post(stats::create_chart),
+        )
+        .route("/stats/charts/{id}", delete(stats::delete_chart))
+        .route("/stats/charts/{id}/data", get(stats::chart_data))
+        .route("/stats/query", post(stats::run_query))
 }
