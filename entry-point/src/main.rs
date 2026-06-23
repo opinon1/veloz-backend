@@ -121,14 +121,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .max_connections(4)
         .after_connect(|conn, _meta| {
             Box::pin(async move {
-                sqlx::query(
-                    "SET ROLE veloz_stats; \
-                     SET default_transaction_read_only = on; \
-                     SET statement_timeout = '10s'; \
-                     SET idle_in_transaction_session_timeout = '15s'",
-                )
-                .execute(conn)
-                .await?;
+                // One statement per call: sqlx::query uses the prepared/extended
+                // protocol, which rejects multiple `;`-separated commands in a
+                // single query. Reborrow `&mut *conn` so the connection can be
+                // reused across calls.
+                sqlx::query("SET ROLE veloz_stats")
+                    .execute(&mut *conn)
+                    .await?;
+                sqlx::query("SET default_transaction_read_only = on")
+                    .execute(&mut *conn)
+                    .await?;
+                sqlx::query("SET statement_timeout = '10s'")
+                    .execute(&mut *conn)
+                    .await?;
+                sqlx::query("SET idle_in_transaction_session_timeout = '15s'")
+                    .execute(&mut *conn)
+                    .await?;
                 Ok(())
             })
         })
