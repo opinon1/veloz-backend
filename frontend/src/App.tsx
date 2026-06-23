@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { getToken, clearToken } from "./api";
+import { useEffect, useState } from "react";
+import { getToken, clearTokens } from "./api";
 import Login from "./components/Login";
 import Dashboard from "./components/Dashboard";
 import QueryRunner from "./components/QueryRunner";
@@ -11,12 +11,20 @@ export default function App() {
   const [token, setTokenState] = useState<string>(getToken());
   const [tab, setTab] = useState<Tab>("dash");
 
+  // The API layer fires "veloz:logout" when a refresh fails (refresh token
+  // expired/revoked) — drop back to the login screen.
+  useEffect(() => {
+    const onLogout = () => setTokenState("");
+    window.addEventListener("veloz:logout", onLogout);
+    return () => window.removeEventListener("veloz:logout", onLogout);
+  }, []);
+
   if (!token) {
     return <Login onAuthed={(t) => setTokenState(t)} />;
   }
 
   const logout = () => {
-    clearToken();
+    clearTokens();
     setTokenState("");
   };
 
