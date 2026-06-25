@@ -105,33 +105,32 @@ impl Mailer {
     /// no AWS credentials.
     ///
     ///   SQS_EMAIL_QUEUE_URL  — required; presence enables the feature
-    ///   EMAIL_FROM           — sender address (default noreply@velozthegame.com)
+    ///   EMAIL_FROM           — sender address (default info@velozthegame.com)
     ///   EMAIL_SUPPORT_ADDR   — support mailto (default soporte@velozthegame.com)
     ///   EMAIL_CTA_URL        — receipt CTA link (default https://velozthegame.com)
     ///   SES_REGION           — optional SES region override (else AWS_REGION)
+    ///   SES_ACCESS_KEY_ID    — optional static SES creds (else task IAM role)
+    ///   SES_SECRET_ACCESS_KEY  paired with SES_ACCESS_KEY_ID
+    ///
+    /// SQS always uses the task IAM role (default provider chain). SES can use a
+    /// *separate* account by setting SES_ACCESS_KEY_ID/SES_SECRET_ACCESS_KEY —
+    /// the sending identity lives on that account, decoupled from where the
+    /// queue runs.
     pub async fn from_env() -> Option<Self> {
         let queue_url = env::var("SQS_EMAIL_QUEUE_URL")
             .ok()
             .filter(|s| !s.is_empty())?;
-        let from = env_or("EMAIL_FROM", "noreply@velozthegame.com");
+        let from = env_or("EMAIL_FROM", "info@velozthegame.com");
         let support_addr = env_or("EMAIL_SUPPORT_ADDR", "soporte@velozthegame.com");
         let cta_url = env_or("EMAIL_CTA_URL", "https://velozthegame.com");
 
         // Shared config (region + credentials) from the standard provider
         // chain. On Fargate this resolves the task IAM role automatically.
+        // SQS uses this directly.
         let shared = aws_config::load_defaults(BehaviorVersion::latest()).await;
         let sqs = aws_sdk_sqs::Client::new(&shared);
 
-        // SES may live in a different region than SQS if needed.
-        let ses = match env::var("SES_REGION").ok().filter(|s| !s.is_empty()) {
-            Some(region) => {
-                let ses_cfg = aws_sdk_sesv2::config::Builder::from(&shared)
-                    .region(aws_sdk_sesv2::config::Region::new(region))
-                    .build();
-                aws_sdk_sesv2::Client::from_conf(ses_cfg)
-            }
-            None => aws_sdk_sesv2::Client::new(&shared),
-        };
+        let ses = build_ses_client(&shared);
 
         Some(Self {
             sqs,
@@ -330,6 +329,32 @@ fn env_or(key: &str, default: &str) -> String {
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| default.to_string())
+}
+
+/// Build the SES v2 client. Starts from the shared (task-role) config, then
+/// optionally overrides region (`SES_REGION`) and credentials
+/// (`SES_ACCESS_KEY_ID` + `SES_SECRET_ACCESS_KEY`). The credential override lets
+/// SES send from a *different* AWS account than the one the task role belongs
+/// to — the sender identity (e.g. info@velozthegame.com) is verified on that
+/// account. When the static creds are unset, SES falls back to the task role,
+/// preserving the previous behaviour.
+fn build_ses_client(shared: &aws_config::SdkConfig) -> aws_sdk_sesv2::Client {
+    let mut builder = aws_sdk_sesv2::config::Builder::from(shared);
+
+    if let Some(region) = env::var("SES_REGION").ok().filter(|s| !s.is_empty()) {
+        builder = builder.region(aws_sdk_sesv2::config::Region::new(region));
+    }
+
+    let access_key = env::var("SES_ACCESS_KEY_ID").ok().filter(|s| !s.is_empty());
+    let secret_key = env::var("SES_SECRET_ACCESS_KEY")
+        .ok()
+        .filter(|s| !s.is_empty());
+    if let (Some(ak), Some(sk)) = (access_key, secret_key) {
+        let creds = aws_sdk_sesv2::config::Credentials::new(ak, sk, None, None, "veloz-ses-static");
+        builder = builder.credentials_provider(creds);
+    }
+
+    aws_sdk_sesv2::Client::from_conf(builder.build())
 }
 
 // ───────────────────────── Producer helpers ─────────────────────────
