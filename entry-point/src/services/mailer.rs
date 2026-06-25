@@ -44,8 +44,6 @@ pub struct EmailJob {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EmailKind {
-    /// Sent after a successful signup.
-    Welcome { username: String },
     /// Sent after a real-money payment is APPROVED (Etomin). Fields map 1:1 to
     /// the `order_confirmed.html` template placeholders. `cta_url`,
     /// `support_email`, and `year` are filled at render time from config.
@@ -144,18 +142,6 @@ impl Mailer {
 
     fn render(&self, kind: &EmailKind) -> Rendered {
         match kind {
-            EmailKind::Welcome { username } => Rendered {
-                subject: "Welcome to Veloz".to_string(),
-                html: format!(
-                    "<h1>Welcome, {u}!</h1><p>Your Veloz account is ready. \
-                     Jump in and start your first run.</p>",
-                    u = esc(username)
-                ),
-                text: format!(
-                    "Welcome, {username}!\n\nYour Veloz account is ready. \
-                     Jump in and start your first run."
-                ),
-            },
             EmailKind::PurchaseReceipt {
                 customer_name,
                 pack_name,
@@ -358,21 +344,6 @@ fn build_ses_client(shared: &aws_config::SdkConfig) -> aws_sdk_sesv2::Client {
 }
 
 // ───────────────────────── Producer helpers ─────────────────────────
-
-/// Fire-and-forget producer for a known recipient. Spawns the enqueue so the
-/// caller's response is never delayed and an SQS hiccup never bubbles up. No-op
-/// when the mailer is disabled.
-pub fn dispatch_to(state: &AppState, to: String, kind: EmailKind) {
-    let Some(mailer) = state.mailer.clone() else {
-        return;
-    };
-    tokio::spawn(async move {
-        let job = EmailJob { to, kind };
-        if let Err(e) = mailer.enqueue(&job).await {
-            tracing::warn!("email enqueue failed: {e}");
-        }
-    });
-}
 
 /// Look up the buyer's email + username, build a `PurchaseReceipt`, and enqueue
 /// it. Awaited form — used by the background reconciler. Logs and returns on any
