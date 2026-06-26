@@ -95,6 +95,9 @@ pub struct Mailer {
     support_addr: String,
     /// "Back to game" CTA link in the receipt.
     cta_url: String,
+    /// Optional internal address BCC'd on every outbound message (monitoring
+    /// copy). Empty = no BCC.
+    bcc: String,
 }
 
 impl Mailer {
@@ -106,6 +109,7 @@ impl Mailer {
     ///   EMAIL_FROM           — sender address (default info@velozthegame.com)
     ///   EMAIL_SUPPORT_ADDR   — support mailto (default soporte@velozthegame.com)
     ///   EMAIL_CTA_URL        — receipt CTA link (default https://velozthegame.com)
+    ///   EMAIL_BCC            — monitoring BCC on every send (default contacto@velozthegame.com; set empty to disable)
     ///   SES_REGION           — optional SES region override (else AWS_REGION)
     ///   SES_ACCESS_KEY_ID    — optional static SES creds (else task IAM role)
     ///   SES_SECRET_ACCESS_KEY  paired with SES_ACCESS_KEY_ID
@@ -121,6 +125,11 @@ impl Mailer {
         let from = env_or("EMAIL_FROM", "info@velozthegame.com");
         let support_addr = env_or("EMAIL_SUPPORT_ADDR", "soporte@velozthegame.com");
         let cta_url = env_or("EMAIL_CTA_URL", "https://velozthegame.com");
+        // Unset → default monitoring address; explicitly empty → disabled.
+        let bcc = env::var("EMAIL_BCC")
+            .unwrap_or_else(|_| "contacto@velozthegame.com".to_string())
+            .trim()
+            .to_string();
 
         // Shared config (region + credentials) from the standard provider
         // chain. On Fargate this resolves the task IAM role automatically.
@@ -137,6 +146,7 @@ impl Mailer {
             from,
             support_addr,
             cta_url,
+            bcc,
         })
     }
 
@@ -296,7 +306,13 @@ impl Mailer {
         let body = Body::builder().html(html).text(text).build();
         let message = Message::builder().subject(subject).body(body).build();
         let content = EmailContent::builder().simple(message).build();
-        let dest = Destination::builder().to_addresses(&job.to).build();
+        let mut dest_builder = Destination::builder().to_addresses(&job.to);
+        // Monitoring copy: BCC the internal address on every send (hidden from
+        // the recipient). Skip when the BCC happens to equal the recipient.
+        if !self.bcc.is_empty() && self.bcc != job.to {
+            dest_builder = dest_builder.bcc_addresses(&self.bcc);
+        }
+        let dest = dest_builder.build();
 
         self.ses
             .send_email()
